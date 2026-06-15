@@ -62,8 +62,9 @@ def get_changes(old, new):
     added = {n: s for n, s in new.items() if n not in old}
     return added
 
-def format_stock_message(data):
-    msg = f"📦 <b>ВЕСЬ СТОК Grow a Garden 2</b>\n🕐 {datetime.now().strftime('%H:%M:%S')}\n\n"
+def format_full_stock_message(data):
+    """Полный текущий сток"""
+    msg = f"📦 <b>ТЕКУЩИЙ СТОК Grow a Garden 2</b>\n🕐 {datetime.now().strftime('%H:%M:%S')}\n\n"
     for shop_type, shop_name in [("SeedShop_Normal", "🌾 Семена"), 
                                    ("CrateShop", "📦 Ящики"), 
                                    ("GearShop", "⚙️ Снаряжение")]:
@@ -85,6 +86,7 @@ def get_main_menu():
         [InlineKeyboardButton("🌾 Семена", callback_data="category_Семена")],
         [InlineKeyboardButton("📦 Ящики", callback_data="category_Ящики")],
         [InlineKeyboardButton("⚙️ Снаряжение", callback_data="category_Снаряжение")],
+        [InlineKeyboardButton("📦 Текущий сток", callback_data="show_full_stock")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -175,6 +177,27 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📦 <b>Всего предметов:</b> {len(all_items)}",
             parse_mode=ParseMode.HTML,
             reply_markup=get_main_menu())
+    
+    elif data == "show_full_stock":
+        try:
+            resp = requests.get(API_URL, timeout=15)
+            if resp.status_code == 200:
+                msg = format_full_stock_message(resp.json())
+                await query.edit_message_text(
+                    msg,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=get_main_menu()
+                )
+            else:
+                await query.edit_message_text(
+                    "❌ Ошибка получения стока",
+                    reply_markup=get_main_menu()
+                )
+        except Exception as e:
+            await query.edit_message_text(
+                f"❌ Ошибка: {e}",
+                reply_markup=get_main_menu()
+            )
     
     elif data.startswith("category_"):
         category = data.replace("category_", "")
