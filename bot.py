@@ -8,7 +8,7 @@ from telegram.constants import ParseMode
 import os
 
 # ================= НАСТРОЙКИ =================
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8808377767:AAECq8Cy4QXWjUYqg1K384IH1J87v0V3ItY)
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 API_URL = "https://grow-a-garden-2-tracker.onrender.com/api/stock"
 DATA_FILE = "user_settings.json"
 
@@ -203,7 +203,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_settings[user_id]["subscriptions"] = subscriptions
         save_settings(user_settings)
         
-        # Остаёмся на той же странице
         await query.edit_message_reply_markup(
             reply_markup=get_items_menu(user_id, category, page))
     
@@ -255,6 +254,10 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
 # ================= ЗАПУСК =================
 
 def main():
+    if not TOKEN:
+        logger.error("❌ Ошибка: Токен не найден! Добавьте переменную TELEGRAM_BOT_TOKEN в Railway")
+        return
+    
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_handler))
