@@ -6,13 +6,10 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from telegram.constants import ParseMode
 import asyncio
-import sys
-
-if sys.version_info[0] == 3 and sys.version_info[1] >= 10:
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+import os
 
 # ================= НАСТРОЙКИ =================
-TOKEN = "8808377767:AAECq8Cy4QXWjUYqg1K384IH1J87v0V3ItY"
+TOKEN = os.getenv("8808377767:AAECq8Cy4QXWjUYqg1K384IH1J87v0V3ItY")  # Берём токен из переменных окружения Railway
 API_URL = "https://grow-a-garden-2-tracker.onrender.com/api/stock"
 DATA_FILE = "user_settings.json"
 
@@ -337,4 +334,4 @@ def main():
     app.run_polling()
 
 if __name__ == "__main__":
-    main() 
+    main()
