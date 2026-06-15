@@ -60,7 +60,9 @@ def get_stock_signature(data):
 
 def get_changes(old, new):
     added = {n: s for n, s in new.items() if n not in old}
-    return added
+    removed = {n: s for n, s in old.items() if n not in new}
+    changed = {n: {'old': old[n], 'new': new[n]} for n in new if n in old and old[n] != new[n]}
+    return added, removed, changed
 
 def format_full_stock_message(data):
     """Полный текущий сток"""
@@ -86,7 +88,8 @@ def get_main_menu():
         [InlineKeyboardButton("🌾 Семена", callback_data="category_Семена")],
         [InlineKeyboardButton("📦 Ящики", callback_data="category_Ящики")],
         [InlineKeyboardButton("⚙️ Снаряжение", callback_data="category_Снаряжение")],
-        [InlineKeyboardButton("📦 Текущий сток", callback_data="show_full_stock")],
+        [InlineKeyboardButton("📋 Мои подписки", callback_data="view_subscriptions")],
+        [InlineKeyboardButton("📦 Весь сток", callback_data="show_full_stock")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -113,6 +116,30 @@ def get_items_menu(user_id, category, page=0):
         nav_buttons.append(InlineKeyboardButton("◀️ Назад", callback_data=f"page_{category}_{page-1}"))
     if page < total_pages - 1:
         nav_buttons.append(InlineKeyboardButton("Вперёд ▶️", callback_data=f"page_{category}_{page+1}"))
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+    
+    keyboard.append([InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_menu")])
+    return InlineKeyboardMarkup(keyboard)
+
+def get_subscriptions_menu(user_id, page=0):
+    settings = user_settings.get(str(user_id), {"subscriptions": []})
+    subscriptions = settings.get("subscriptions", [])
+    items_per_page = 10
+    total_pages = (len(subscriptions) + items_per_page - 1) // items_per_page
+    start = page * items_per_page
+    end = start + items_per_page
+    current_subs = subscriptions[start:end]
+    
+    keyboard = []
+    for sub in current_subs:
+        keyboard.append([InlineKeyboardButton(f"❌ {sub}", callback_data=f"unsub_{sub}")])
+    
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("◀️", callback_data=f"sub_page_{page-1}"))
+    if page < total_pages - 1:
+        nav_buttons.append(InlineKeyboardButton("▶️", callback_data=f"sub_page_{page+1}"))
     if nav_buttons:
         keyboard.append(nav_buttons)
     
@@ -183,21 +210,34 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             resp = requests.get(API_URL, timeout=15)
             if resp.status_code == 200:
                 msg = format_full_stock_message(resp.json())
-                await query.edit_message_text(
-                    msg,
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=get_main_menu()
-                )
+                await query.edit_message_text(msg, parse_mode=ParseMode.HTML, reply_markup=get_main_menu())
             else:
-                await query.edit_message_text(
-                    "❌ Ошибка получения стока",
-                    reply_markup=get_main_menu()
-                )
+                await query.edit_message_text("❌ Ошибка получения стока", reply_markup=get_main_menu())
         except Exception as e:
-            await query.edit_message_text(
-                f"❌ Ошибка: {e}",
-                reply_markup=get_main_menu()
-            )
+            await query.edit_message_text(f"❌ Ошибка: {e}", reply_markup=get_main_menu())
+    
+    elif data == "view_subscriptions":
+        subscriptions = user_settings[user_id].get("subscriptions", [])
+        if not subscriptions:
+            await query.edit_message_text("📋 <b>У тебя пока нет подписок</b>", parse_mode=ParseMode.HTML, reply_markup=get_main_menu())
+        else:
+            await query.edit_message_text("📋 <b>Твои подписки</b>\n\nНажми на предмет, чтобы отписаться:", parse_mode=ParseMode.HTML, reply_markup=get_subscriptions_menu(user_id))
+    
+    elif data.startswith("sub_page_"):
+        page = int(data.split("_")[2])
+        await query.edit_message_reply_markup(reply_markup=get_subscriptions_menu(user_id, page))
+    
+    elif data.startswith("unsub_"):
+        item_name = data.replace("unsub_", "")
+        subscriptions = user_settings[user_id].get("subscriptions", [])
+        subscriptions = [s for s in subscriptions if s != item_name]
+        user_settings[user_id]["subscriptions"] = subscriptions
+        save_settings(user_settings)
+        await query.answer(f"❌ {item_name} удалён")
+        if subscriptions:
+            await query.edit_message_reply_markup(reply_markup=get_subscriptions_menu(user_id))
+        else:
+            await query.edit_message_text("📋 <b>У тебя пока нет подписок</b>", parse_mode=ParseMode.HTML, reply_markup=get_main_menu())
     
     elif data.startswith("category_"):
         category = data.replace("category_", "")
@@ -206,7 +246,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.HTML,
             reply_markup=get_items_menu(user_id, category, 0))
         context.user_data['current_category'] = category
-        context.user_data['current_page'] = 0
     
     elif data.startswith("item_"):
         parts = data.split("_")
@@ -226,15 +265,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_settings[user_id]["subscriptions"] = subscriptions
         save_settings(user_settings)
         
-        await query.edit_message_reply_markup(
-            reply_markup=get_items_menu(user_id, category, page))
+        await query.edit_message_reply_markup(reply_markup=get_items_menu(user_id, category, page))
     
     elif data.startswith("page_"):
         parts = data.split("_")
         category = parts[1]
         page = int(parts[2])
-        await query.edit_message_reply_markup(
-            reply_markup=get_items_menu(user_id, category, page))
+        await query.edit_message_reply_markup(reply_markup=get_items_menu(user_id, category, page))
 
 # ================= ФОНОВАЯ ПРОВЕРКА =================
 
@@ -243,31 +280,41 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
     try:
         resp = requests.get(API_URL, timeout=15)
         if resp.status_code != 200:
+            logger.warning(f"API вернул код {resp.status_code}")
             return
+        
         data = resp.json()
         new_stock_sig = get_stock_signature(data)
         
         if last_stock_data is not None:
-            added = get_changes(last_stock_data, new_stock_sig)
+            added, removed, changed = get_changes(last_stock_data, new_stock_sig)
             
-            if added:
+            if added or removed or changed:
+                logger.info(f"Изменения: +{len(added)} -{len(removed)} ~{len(changed)}")
+                
                 for user_id, settings in user_settings.items():
                     subscriptions = settings.get("subscriptions", [])
                     if not subscriptions:
                         continue
                     
                     user_added = {n: s for n, s in added.items() if n in subscriptions}
+                    user_removed = {n: s for n, s in removed.items() if n in subscriptions}
+                    user_changed = {n: c for n, c in changed.items() if n in subscriptions}
                     
-                    if user_added:
-                        msg = f"📢 <b>Появились предметы из твоих подписок!</b>\n🕐 {datetime.now().strftime('%H:%M:%S')}\n\n"
-                        for name, stock in user_added.items():
-                            msg += f"• <b>{name}</b> — {stock} шт.\n"
+                    if user_added or user_removed or user_changed:
+                        msg = f"📢 <b>Изменения в стоке!</b>\n🕐 {datetime.now().strftime('%H:%M:%S')}\n\n"
+                        if user_added:
+                            msg += "🟢 <b>Появились:</b>\n" + "\n".join([f"• {n} — {s} шт." for n, s in user_added.items()]) + "\n\n"
+                        if user_changed:
+                            msg += "🟡 <b>Изменилось количество:</b>\n" + "\n".join([f"• {n}: {c['old']} → {c['new']} шт." for n, c in user_changed.items()]) + "\n\n"
+                        if user_removed:
+                            msg += "🔴 <b>Пропали:</b>\n" + "\n".join([f"• {n}" for n in user_removed]) + "\n"
                         
                         try:
                             await context.bot.send_message(int(user_id), msg, parse_mode=ParseMode.HTML)
-                            logger.info(f"Уведомление отправлено {user_id}")
+                            logger.info(f"✅ Уведомление отправлено {user_id}")
                         except Exception as e:
-                            logger.error(f"Не отправлено {user_id}: {e}")
+                            logger.error(f"❌ Не отправлено {user_id}: {e}")
         
         last_stock_data = new_stock_sig
             
@@ -284,7 +331,7 @@ def main():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_handler))
-    app.job_queue.run_repeating(check_and_notify, interval=60, first=5)
+    app.job_queue.run_repeating(check_and_notify, interval=30, first=5)
     logger.info("✅ Бот запущен!")
     app.run_polling()
 
