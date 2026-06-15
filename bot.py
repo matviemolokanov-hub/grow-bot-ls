@@ -6,13 +6,10 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from telegram.constants import ParseMode
 import asyncio
-import sys
-
-if sys.version_info[0] == 3 and sys.version_info[1] >= 10:
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+import os
 
 # ================= НАСТРОЙКИ =================
-TOKEN = "8808377767:AAECq8Cy4QXWjUYqg1K384IH1J87v0V3ItY"
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8808377767:AAECq8Cy4QXWjUYqg1K384IH1J87v0V3ItY")
 API_URL = "https://grow-a-garden-2-tracker.onrender.com/api/stock"
 DATA_FILE = "user_settings.json"
 
@@ -238,11 +235,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if item_name in sub_names:
             subscriptions = [s for s in subscriptions if s['name'] != item_name]
-            action = "удалён"
         else:
             item_info = all_items.get(item_name, {})
             subscriptions.append({'name': item_name, 'category': item_info.get('category', ''), 'rarity': item_info.get('rarity', 'Common'), 'type': item_info.get('type', '')})
-            action = "добавлен"
         
         user_settings[user_id]["subscriptions"] = subscriptions
         save_settings(user_settings)
