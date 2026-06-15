@@ -8,7 +8,7 @@ from telegram.constants import ParseMode
 import os
 
 # ================= НАСТРОЙКИ =================
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8808377767:AAECq8Cy4QXWjUYqg1K384IH1J87v0V3ItY")
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8808377767:AAECq8Cy4QXWjUYqg1K384IH1J87v0V3ItY)
 API_URL = "https://grow-a-garden-2-tracker.onrender.com/api/stock"
 DATA_FILE = "user_settings.json"
 
@@ -60,8 +60,7 @@ def get_stock_signature(data):
 
 def get_changes(old, new):
     added = {n: s for n, s in new.items() if n not in old}
-    removed = {n: s for n, s in old.items() if n not in new}
-    return added, removed
+    return added
 
 def format_stock_message(data):
     msg = f"📦 <b>ВЕСЬ СТОК Grow a Garden 2</b>\n🕐 {datetime.now().strftime('%H:%M:%S')}\n\n"
@@ -89,8 +88,9 @@ def get_main_menu():
     ]
     return InlineKeyboardMarkup(keyboard)
 
-def get_items_menu(category, page=0):
+def get_items_menu(user_id, category, page=0):
     items_per_page = 10
+    subscriptions = user_settings.get(str(user_id), {}).get("subscriptions", [])
     
     items_list = [name for name, info in all_items.items() if info['category'] == category]
     items_list.sort()
@@ -102,19 +102,19 @@ def get_items_menu(category, page=0):
     
     keyboard = []
     for item_name in current_items:
-        rarity_emoji = {'Common': '🟢', 'Rare': '🔵', 'Epic': '🟣', 'Legendary': '🟡', 'Mythic': '🔴', 'Super': '⭐'}.get(all_items[item_name]['rarity'], '⚪')
-        keyboard.append([InlineKeyboardButton(f"{rarity_emoji} {item_name}", callback_data=f"item_{item_name}")])
+        is_selected = item_name in subscriptions
+        button_text = f"{'✅' if is_selected else '❌'} {item_name}"
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=f"item_{category}_{page}_{item_name}")])
     
     nav_buttons = []
     if page > 0:
-        nav_buttons.append(InlineKeyboardButton("◀️", callback_data=f"page_{category}_{page-1}"))
-    nav_buttons.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="ignore"))
+        nav_buttons.append(InlineKeyboardButton("◀️ Назад", callback_data=f"page_{category}_{page-1}"))
     if page < total_pages - 1:
-        nav_buttons.append(InlineKeyboardButton("▶️", callback_data=f"page_{category}_{page+1}"))
+        nav_buttons.append(InlineKeyboardButton("Вперёд ▶️", callback_data=f"page_{category}_{page+1}"))
     if nav_buttons:
         keyboard.append(nav_buttons)
     
-    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")])
+    keyboard.append([InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_menu")])
     return InlineKeyboardMarkup(keyboard)
 
 # ================= ОБНОВЛЕНИЕ ПРЕДМЕТОВ =================
@@ -139,8 +139,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update_all_items()
     await update.message.reply_text(
         "🌱 <b>Grow a Garden 2 Tracker</b>\n\n"
-        "Выбери категорию, затем нажми на предмет,\n"
-        "чтобы получать уведомления, когда он появится в стоке.\n\n"
+        "Выбери категорию, затем нажми на предмет.\n"
+        "✅ — получать уведомления\n"
+        "❌ — не получать\n\n"
         f"📦 <b>Всего предметов:</b> {len(all_items)}",
         parse_mode=ParseMode.HTML,
         reply_markup=get_main_menu()
@@ -168,8 +169,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "back_to_menu":
         await query.edit_message_text(
             "🌱 <b>Grow a Garden 2 Tracker</b>\n\n"
-            "Выбери категорию, затем нажми на предмет,\n"
-            "чтобы получать уведомления, когда он появится в стоке.\n\n"
+            "Выбери категорию, затем нажми на предмет.\n"
+            "✅ — получать уведомления\n"
+            "❌ — не получать\n\n"
             f"📦 <b>Всего предметов:</b> {len(all_items)}",
             parse_mode=ParseMode.HTML,
             reply_markup=get_main_menu())
@@ -177,33 +179,40 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("category_"):
         category = data.replace("category_", "")
         await query.edit_message_text(
-            f"📂 <b>{category}</b>\n\nНажми на предмет, чтобы подписаться на уведомления:",
+            f"📂 <b>{category}</b>\n\n✅ — получать уведомления\n❌ — не получать",
             parse_mode=ParseMode.HTML,
-            reply_markup=get_items_menu(category, 0))
+            reply_markup=get_items_menu(user_id, category, 0))
         context.user_data['current_category'] = category
+        context.user_data['current_page'] = 0
     
     elif data.startswith("item_"):
-        item_name = data.replace("item_", "")
+        parts = data.split("_")
+        category = parts[1]
+        page = int(parts[2])
+        item_name = "_".join(parts[3:])
+        
         subscriptions = user_settings[user_id].get("subscriptions", [])
         
         if item_name in subscriptions:
             subscriptions.remove(item_name)
-            await query.answer(f"❌ {item_name} удалён из уведомлений")
+            await query.answer(f"❌ {item_name} — уведомления выключены")
         else:
             subscriptions.append(item_name)
-            await query.answer(f"✅ {item_name} добавлен в уведомления")
+            await query.answer(f"✅ {item_name} — уведомления включены")
         
         user_settings[user_id]["subscriptions"] = subscriptions
         save_settings(user_settings)
         
-        category = context.user_data.get('current_category', 'Семена')
-        await query.edit_message_reply_markup(reply_markup=get_items_menu(category, 0))
+        # Остаёмся на той же странице
+        await query.edit_message_reply_markup(
+            reply_markup=get_items_menu(user_id, category, page))
     
     elif data.startswith("page_"):
         parts = data.split("_")
         category = parts[1]
         page = int(parts[2])
-        await query.edit_message_reply_markup(reply_markup=get_items_menu(category, page))
+        await query.edit_message_reply_markup(
+            reply_markup=get_items_menu(user_id, category, page))
 
 # ================= ФОНОВАЯ ПРОВЕРКА =================
 
@@ -217,7 +226,7 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
         new_stock_sig = get_stock_signature(data)
         
         if last_stock_data is not None:
-            added, removed = get_changes(last_stock_data, new_stock_sig)
+            added = get_changes(last_stock_data, new_stock_sig)
             
             if added:
                 for user_id, settings in user_settings.items():
@@ -230,9 +239,7 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                     if user_added:
                         msg = f"📢 <b>Появились предметы из твоих подписок!</b>\n🕐 {datetime.now().strftime('%H:%M:%S')}\n\n"
                         for name, stock in user_added.items():
-                            rarity = all_items.get(name, {}).get('rarity', 'Common')
-                            rarity_emoji = {'Common': '🟢', 'Rare': '🔵', 'Epic': '🟣', 'Legendary': '🟡', 'Mythic': '🔴', 'Super': '⭐'}.get(rarity, '⚪')
-                            msg += f"{rarity_emoji} <b>{name}</b> — {stock} шт.\n"
+                            msg += f"• <b>{name}</b> — {stock} шт.\n"
                         
                         try:
                             await context.bot.send_message(int(user_id), msg, parse_mode=ParseMode.HTML)
