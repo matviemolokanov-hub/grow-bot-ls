@@ -596,7 +596,7 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
             if added or removed or changed:
                 logger.info(f"Изменения: +{len(added)} -{len(removed)} ~{len(changed)}")
                 
-                # 1. ЛС пользователям
+                # === 1. ОТПРАВКА В ЛС ===
                 for user_id, settings in user_settings.items():
                     subscriptions = settings.get("subscriptions", [])
                     if not subscriptions:
@@ -621,16 +621,25 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                         except Exception as e:
                             logger.error(f"❌ Не отправлено в ЛС {user_id}: {e}")
                 
-                # 2. Группы (только добавленные)
+                # === 2. ОТПРАВКА В ГРУППУ (ВСЕ ИЗМЕНЕНИЯ) ===
                 for chat_id_str, settings in group_settings.items():
                     subscriptions = settings.get("subscriptions", [])
                     if not subscriptions:
                         continue
                     
                     group_added = {n: s for n, s in added.items() if n in subscriptions}
-                    if group_added:
-                        msg = f"🌱 <b>НОВЫЙ СТОК В GROUP!</b>\n🕐 {datetime.now().strftime('%H:%M:%S')}\n\n"
-                        msg += "\n".join([f"• {n} — {s} шт." for n, s in group_added.items()])
+                    group_removed = {n: s for n, s in removed.items() if n in subscriptions}
+                    group_changed = {n: c for n, c in changed.items() if n in subscriptions}
+                    
+                    if group_added or group_removed or group_changed:
+                        msg = f"📢 <b>Изменения в стоке!</b>\n🕐 {datetime.now().strftime('%H:%M:%S')}\n\n"
+                        
+                        if group_added:
+                            msg += "🟢 <b>Появились:</b>\n" + "\n".join([f"• {n} — {s} шт." for n, s in group_added.items()]) + "\n\n"
+                        if group_changed:
+                            msg += "🟡 <b>Изменилось количество:</b>\n" + "\n".join([f"• {n}: {c['old']} → {c['new']} шт." for n, c in group_changed.items()]) + "\n\n"
+                        if group_removed:
+                            msg += "🔴 <b>Пропали:</b>\n" + "\n".join([f"• {n}" for n in group_removed]) + "\n"
                         
                         try:
                             await context.bot.send_message(int(chat_id_str), msg, parse_mode=ParseMode.HTML)
