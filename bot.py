@@ -11,7 +11,8 @@ import time
 # ================= НАСТРОЙКИ =================
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 API_URL = "https://grow-a-garden-2-tracker.onrender.com/api/stock"
-CHANNEL_ID = -1003618091927
+CHANNEL_ID = -1003755798218  # ID группы (с -100)
+MESSAGE_THREAD_ID = 5995      # ID темы
 DATA_FILE = "user_settings.json"
 GROUP_SETTINGS_FILE = "group_settings.json"
 ITEMS_CACHE_FILE = "items_cache.json"
@@ -64,6 +65,7 @@ user_settings = load_json(DATA_FILE, {})
 group_settings = load_json(GROUP_SETTINGS_FILE, {})
 all_items = {}
 last_stock_data = None
+_last_rare_message = None
 _items_cache_time = 0
 
 # ================= КЕШИРОВАНИЕ =================
@@ -120,16 +122,14 @@ def get_changes(old, new):
 # ================= ФОРМАТИРОВАНИЕ =================
 
 def format_rare_stock_for_channel(data):
-    """Улучшенное сообщение для канала с разделителями и эмодзи"""
+    """Улучшенное сообщение для канала/темы с разделителями и эмодзи"""
     msk_time = get_msk_time()
     
-    # Эмодзи для категорий
     category_emojis = {
         "SeedShop_Normal": "🌱",
         "GearShop": "⚙️"
     }
     
-    # Эмодзи для редкостей
     rarity_emojis = {
         "Epic": "🟣",
         "Legendary": "⭐",
@@ -137,7 +137,6 @@ def format_rare_stock_for_channel(data):
         "Super": "🌟"
     }
     
-    # Названия категорий
     category_names = {
         "SeedShop_Normal": "СЕМЕНА",
         "GearShop": "СНАРЯЖЕНИЕ"
@@ -181,17 +180,8 @@ def format_group_stock_message(added, changed, removed):
         "Снаряжение": "⚙️"
     }
     
-    rarity_emojis = {
-        "Common": "",
-        "Rare": "",
-        "Epic": "",
-        "Legendary": "",
-        "Mythic": "",
-        "Super": ""
-    }
-
     categories = {}
-    
+
     for name, stock in added.items():
         info = all_items.get(name, {})
         cat = info.get('category', 'Неизвестно')
@@ -665,7 +655,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ================= ФОНОВАЯ ПРОВЕРКА =================
 async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
-    global last_stock_data
+    global last_stock_data, _last_rare_message
     try:
         resp = requests.get(API_URL, timeout=15)
         if resp.status_code != 200:
@@ -674,14 +664,23 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
         data = resp.json()
         new_stock_sig = get_stock_signature(data)
 
-        # === КАНАЛ (только редкие) ===
+        # === КАНАЛ/ТЕМА (только редкие) ===
         rare_msg = format_rare_stock_for_channel(data)
         if rare_msg:
-            try:
-                await context.bot.send_message(CHANNEL_ID, rare_msg, parse_mode=ParseMode.HTML)
-                logger.info("✅ Редкий сток отправлен в канал")
-            except Exception as e:
-                logger.error(f"❌ Ошибка отправки в канал: {e}")
+            if rare_msg != _last_rare_message:
+                try:
+                    await context.bot.send_message(
+                        chat_id=CHANNEL_ID,
+                        message_thread_id=MESSAGE_THREAD_ID,  # ← Отправка в тему
+                        text=rare_msg,
+                        parse_mode=ParseMode.HTML
+                    )
+                    _last_rare_message = rare_msg
+                    logger.info(f"✅ Редкий сток отправлен в тему {MESSAGE_THREAD_ID}")
+                except Exception as e:
+                    logger.error(f"❌ Ошибка отправки в тему: {e}")
+            else:
+                logger.info("⏸ Редкий сток не изменился (дубль пропущен)")
 
         if last_stock_data is None:
             last_stock_data = new_stock_sig
