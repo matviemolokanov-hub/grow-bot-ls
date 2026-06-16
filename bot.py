@@ -11,8 +11,7 @@ import time
 # ================= НАСТРОЙКИ =================
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 API_URL = "https://grow-a-garden-2-tracker.onrender.com/api/stock"
-CHANNEL_ID = -1003755798218          # ID группы
-MESSAGE_THREAD_ID = 5995              # ID темы "Стоки"
+CHANNEL_ID = -1003755798218          # ID группы/канала
 DATA_FILE = "user_settings.json"
 GROUP_SETTINGS_FILE = "group_settings.json"
 ITEMS_CACHE_FILE = "items_cache.json"
@@ -229,7 +228,6 @@ def format_full_stock_message(data):
     return msg
 
 # ================= МЕНЮ =================
-# (все функции меню оставлены без изменений)
 
 def get_main_menu():
     keyboard = [
@@ -609,7 +607,7 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
         data = resp.json()
         new_stock_sig = get_stock_signature(data)
 
-        # === Отправка в ТЕМУ "Стоки" ===
+        # === Отправка редкого стока в CHANNEL_ID ===
         current_rare_sig = json.dumps(new_stock_sig, sort_keys=True)
         
         if current_rare_sig != _last_rare_signature:
@@ -618,14 +616,13 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                 try:
                     await context.bot.send_message(
                         chat_id=CHANNEL_ID,
-                        message_thread_id=MESSAGE_THREAD_ID,
                         text=rare_msg,
                         parse_mode=ParseMode.HTML
                     )
                     _last_rare_signature = current_rare_sig
-                    logger.info(f"✅ Редкий сток отправлен в тему {MESSAGE_THREAD_ID}")
+                    logger.info("✅ Редкий сток отправлен в канал")
                 except Exception as e:
-                    logger.error(f"❌ Ошибка отправки в тему: {e}")
+                    logger.error(f"❌ Ошибка отправки: {e}")
 
         if last_stock_data is None:
             last_stock_data = new_stock_sig
@@ -636,7 +633,7 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
         if added or removed or changed:
             logger.info(f"Изменения: +{len(added)} -{len(removed)} ~{len(changed)}")
 
-            # === ГРУППЫ + ТЕМА ===
+            # === ГРУППЫ ===
             for chat_id_str, settings in group_settings.items():
                 subscriptions = settings.get("subscriptions", [])
                 if not subscriptions:
@@ -648,24 +645,11 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
 
                 if group_added or group_changed or group_removed:
                     msg = format_group_stock_message(group_added, group_changed, group_removed)
-                    
-                    # Отправка в обычную группу
                     try:
                         await context.bot.send_message(int(chat_id_str), msg, parse_mode=ParseMode.HTML)
+                        logger.info(f"✅ Отправлено в группу {chat_id_str}")
                     except Exception as e:
-                        logger.error(f"❌ Ошибка отправки в группу {chat_id_str}: {e}")
-                    
-                    # Отправка в ТЕМУ "Стоки"
-                    try:
-                        await context.bot.send_message(
-                            chat_id=CHANNEL_ID,
-                            message_thread_id=MESSAGE_THREAD_ID,
-                            text=msg,
-                            parse_mode=ParseMode.HTML
-                        )
-                        logger.info(f"✅ Сток отправлен в тему {MESSAGE_THREAD_ID}")
-                    except Exception as e:
-                        logger.error(f"❌ Ошибка отправки в тему: {e}")
+                        logger.error(f"❌ Ошибка отправки в группу: {e}")
 
             # === ЛС ===
             for uid, settings in user_settings.items():
