@@ -11,7 +11,8 @@ import time
 # ================= НАСТРОЙКИ =================
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 API_URL = "https://grow-a-garden-2-tracker.onrender.com/api/stock"
-CHANNEL_ID = -1003618091927
+CHANNEL_ID = -1003618091927          # Канал (сюда отправляется то, что в RARE_RARITIES + FORCED_ITEMS)
+GROUP_CHAT_ID = -1003755798218       # Группа (сюда отправляется то, что в админ-панели)
 DATA_FILE = "user_settings.json"
 GROUP_SETTINGS_FILE = "group_settings.json"
 ITEMS_CACHE_FILE = "items_cache.json"
@@ -20,11 +21,9 @@ CACHE_TTL = 300
 # ================= АДМИНЫ =================
 ADMIN_IDS = [7632708290, 5634818913]
 
-# ================= РЕДКИЕ РЕДКОСТИ =================
-RARE_RARITIES = ["Legendary", "Mythic", "Super"]
-
-# ================= КОНКРЕТНЫЕ ПРЕДМЕТЫ =================
-FORCED_ITEMS = [
+# ================= ЧТО ОТПРАВЛЯЕТСЯ В КАНАЛ (прописываете здесь) =================
+RARE_RARITIES = ["Legendary", "Mythic", "Super"]  # Все предметы этих редкостей
+FORCED_ITEMS = [                                   # Конкретные предметы (дополнительно)
     "Mushroom",
     "Moon Bloom",
     "Legendary Sprinkler",
@@ -64,6 +63,7 @@ user_settings = load_json(DATA_FILE, {})
 group_settings = load_json(GROUP_SETTINGS_FILE, {})
 all_items = {}
 last_stock_data = None
+_last_rare_signature = None
 _items_cache_time = 0
 
 # ================= КЕШИРОВАНИЕ =================
@@ -111,6 +111,25 @@ def get_stock_signature(data):
             signature[item.get('name')] = item.get('stock', 0)
     return signature
 
+def get_rare_stock_signature(data):
+    """Создаёт подпись ТОЛЬКО для предметов из RARE_RARITIES и FORCED_ITEMS (для канала)"""
+    signature = {}
+    
+    for shop_type in ["SeedShop_Normal", "GearShop"]:
+        for item in data.get("shops", {}).get(shop_type, []):
+            name = item.get('name')
+            rarity = item.get('rarity', 'Common')
+            stock = item.get('stock', 0)
+            
+            if (rarity in RARE_RARITIES or name in FORCED_ITEMS) and stock > 0:
+                signature[f"{shop_type}_{name}"] = {
+                    'name': name,
+                    'rarity': rarity,
+                    'stock': stock
+                }
+    
+    return signature
+
 def get_changes(old, new):
     added = {n: s for n, s in new.items() if n not in old}
     removed = {n: s for n, s in old.items() if n not in new}
@@ -120,16 +139,14 @@ def get_changes(old, new):
 # ================= ФОРМАТИРОВАНИЕ =================
 
 def format_rare_stock_for_channel(data):
-    """Улучшенное сообщение для канала с разделителями и эмодзи"""
+    """Форматирует сообщение для КАНАЛА (только RARE_RARITIES + FORCED_ITEMS)"""
     msk_time = get_msk_time()
     
-    # Эмодзи для категорий
     category_emojis = {
         "SeedShop_Normal": "🌱",
         "GearShop": "⚙️"
     }
     
-    # Эмодзи для редкостей
     rarity_emojis = {
         "Epic": "🟣",
         "Legendary": "⭐",
@@ -137,10 +154,9 @@ def format_rare_stock_for_channel(data):
         "Super": "🌟"
     }
     
-    # Названия категорий
     category_names = {
-        "SeedShop_Normal": "СЕМЕНА",
-        "GearShop": "СНАРЯЖЕНИЕ"
+        "SeedShop_Normal": "🌱 СЕМЕНА",
+        "GearShop": "⚙️ СНАРЯЖЕНИЕ"
     }
 
     msg = "🔥 <b>ОБНАРУЖЕН РЕДКИЙ СТОК!</b>\n"
@@ -172,7 +188,7 @@ def format_rare_stock_for_channel(data):
     return msg
 
 def format_group_stock_message(added, changed, removed):
-    """Улучшенное сообщение для группы с категориями и редкостью"""
+    """Форматирует сообщение для ГРУППЫ (по подпискам из админ-панели)"""
     msk_time = get_msk_time()
     
     cat_emojis = {
@@ -181,17 +197,8 @@ def format_group_stock_message(added, changed, removed):
         "Снаряжение": "⚙️"
     }
     
-    rarity_emojis = {
-        "Common": "",
-        "Rare": "",
-        "Epic": "",
-        "Legendary": "",
-        "Mythic": "",
-        "Super": ""
-    }
-
     categories = {}
-    
+
     for name, stock in added.items():
         info = all_items.get(name, {})
         cat = info.get('category', 'Неизвестно')
@@ -426,7 +433,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if chat_id > 0:
-        await update.message.reply_text("❌ Эта команда работает только в группах и каналах!")
+        await update.message.reply_text("❌ Эта команда работает только в группах!")
         return
 
     if user_id not in ADMIN_IDS:
@@ -665,7 +672,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ================= ФОНОВАЯ ПРОВЕРКА =================
 async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
-    global last_stock_data
+    global last_stock_data, _last_rare_signature
     try:
         resp = requests.get(API_URL, timeout=15)
         if resp.status_code != 200:
@@ -673,15 +680,26 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
 
         data = resp.json()
         new_stock_sig = get_stock_signature(data)
+        new_rare_sig = get_rare_stock_signature(data)
 
-        # === КАНАЛ (только редкие) ===
-        rare_msg = format_rare_stock_for_channel(data)
-        if rare_msg:
-            try:
-                await context.bot.send_message(CHANNEL_ID, rare_msg, parse_mode=ParseMode.HTML)
-                logger.info("✅ Редкий сток отправлен в канал")
-            except Exception as e:
-                logger.error(f"❌ Ошибка отправки в канал: {e}")
+        # === ОТПРАВКА В КАНАЛ (по RARE_RARITIES + FORCED_ITEMS) ===
+        current_rare_sig = json.dumps(new_rare_sig, sort_keys=True)
+        
+        if current_rare_sig != _last_rare_signature:
+            rare_msg = format_rare_stock_for_channel(data)
+            if rare_msg:
+                try:
+                    await context.bot.send_message(
+                        chat_id=CHANNEL_ID,
+                        text=rare_msg,
+                        parse_mode=ParseMode.HTML
+                    )
+                    _last_rare_signature = current_rare_sig
+                    logger.info(f"✅ Редкий сток отправлен в канал {CHANNEL_ID}")
+                except Exception as e:
+                    logger.error(f"❌ Ошибка отправки в канал: {e}")
+        else:
+            logger.info("⏸ Редкий сток не изменился")
 
         if last_stock_data is None:
             last_stock_data = new_stock_sig
@@ -692,7 +710,7 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
         if added or removed or changed:
             logger.info(f"Изменения: +{len(added)} -{len(removed)} ~{len(changed)}")
 
-            # === ГРУППЫ ===
+            # === ОТПРАВКА В ГРУППУ (по подпискам из админ-панели) ===
             for chat_id_str, settings in group_settings.items():
                 subscriptions = settings.get("subscriptions", [])
                 if not subscriptions:
@@ -706,11 +724,11 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                     msg = format_group_stock_message(group_added, group_changed, group_removed)
                     try:
                         await context.bot.send_message(int(chat_id_str), msg, parse_mode=ParseMode.HTML)
-                        logger.info(f"✅ Отправлено в группу {chat_id_str}")
+                        logger.info(f"✅ Уведомление отправлено в группу {chat_id_str}")
                     except Exception as e:
-                        logger.error(f"❌ Ошибка отправки в группу: {e}")
+                        logger.error(f"❌ Не отправлено в группу {chat_id_str}: {e}")
 
-            # === ЛС ===
+            # === ОТПРАВКА В ЛС ===
             for uid, settings in user_settings.items():
                 subs = settings.get("subscriptions", [])
                 if not subs:
