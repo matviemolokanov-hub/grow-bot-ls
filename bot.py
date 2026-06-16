@@ -17,7 +17,7 @@ GROUP_SETTINGS_FILE = "group_settings.json"
 ITEMS_CACHE_FILE = "items_cache.json"
 CACHE_TTL = 300
 
-# ================= АДМИНЫ =================
+# ================= АДМИНЫ (ТОЛЬКО ПО ID) =================
 ADMIN_IDS = [7632708290, 5634818913]
 
 # ================= РЕДКИЕ РЕДКОСТИ =================
@@ -27,6 +27,7 @@ RARE_RARITIES = ["Legendary", "Mythic", "Super"]
 FORCED_ITEMS = [
     "Mushroom",
     "Moon Bloom",
+    "Poison Apple",
     "Legendary Sprinkler",
     "Super Watering Can",
     "Super Sprinkler"
@@ -52,7 +53,6 @@ logger = logging.getLogger(__name__)
 
 # ================= ВРЕМЯ МСК =================
 def get_msk_time():
-    """Возвращает текущее время по МСК (UTC+3)"""
     return datetime.now(timezone(timedelta(hours=3)))
 
 # ================= СОХРАНЕНИЕ НАСТРОЕК =================
@@ -133,7 +133,6 @@ def get_changes(old, new):
     return added, removed, changed
 
 def format_rare_stock_for_channel(data):
-    """Форматирует редкие предметы для канала с МСК временем"""
     msk_time = get_msk_time()
     
     emojis = {
@@ -177,7 +176,6 @@ def format_rare_stock_for_channel(data):
     return msg
 
 def format_full_stock_message(data):
-    """Форматирует полный сток с МСК временем"""
     msk_time = get_msk_time()
     msg = f"📦 <b>ТЕКУЩИЙ СТОК Grow a Garden 2</b>\n🕐 {msk_time.strftime('%H:%M:%S')} МСК\n\n"
     for shop_type, shop_name in [("SeedShop_Normal", "🌾 Семена"), 
@@ -333,13 +331,6 @@ def get_subscriptions_menu(user_id, page=0):
     keyboard.append([InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_menu")])
     return InlineKeyboardMarkup(keyboard)
 
-async def is_admin(update: Update, chat_id: int, user_id: int) -> bool:
-    try:
-        chat_member = await update.get_bot().get_chat_member(chat_id, user_id)
-        return chat_member.status in ['creator', 'administrator']
-    except:
-        return False
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     if user_id not in user_settings:
@@ -367,10 +358,6 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if user_id not in ADMIN_IDS:
         await update.message.reply_text("❌ У вас нет прав на использование админ-панели!")
-        return
-    
-    if not await is_admin(update, chat_id, user_id):
-        await update.message.reply_text("❌ Вы должны быть администратором группы, чтобы использовать админ-панель!")
         return
     
     if str(chat_id) not in group_settings:
@@ -489,11 +476,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     elif data.startswith("admin_"):
         if int(user_id) not in ADMIN_IDS:
-            await query.edit_message_text("❌ Нет прав!")
-            return
-        
-        if not await is_admin(update, chat_id, int(user_id)):
-            await query.edit_message_text("❌ Вы должны быть администратором группы!")
+            await query.edit_message_text("❌ У вас нет прав на использование админ-панели!")
             return
         
         if data == "admin_close":
@@ -621,27 +604,22 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ================= ПРОВЕРКА ПОГОДЫ =================
 
 async def check_weather_and_notify(context: ContextTypes.DEFAULT_TYPE):
-    """Проверяет погоду и отправляет уведомления в канал при изменениях"""
     global last_weather
     try:
         resp = requests.get(API_URL, timeout=15)
         if resp.status_code != 200:
-            logger.warning(f"API вернул код {resp.status_code}")
             return
         
         data = resp.json()
         weather = data.get('weather', {})
         weathers = weather.get('weathers', {})
-        phase = weather.get('phase', 'Day')
         
-        # Определяем текущую погоду
         current = None
         for key, name in WEATHER_TYPES.items():
             if weathers.get(key):
                 current = name
                 break
         
-        # Если есть особая погода и она изменилась
         if current is not None:
             if last_weather is None:
                 last_weather = current
@@ -662,7 +640,6 @@ async def check_weather_and_notify(context: ContextTypes.DEFAULT_TYPE):
                 
                 last_weather = current
         else:
-            # Если особая погода закончилась — сбрасываем last_weather
             last_weather = None
             
     except Exception as e:
@@ -687,7 +664,6 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
             if added or removed or changed:
                 logger.info(f"Изменения: +{len(added)} -{len(removed)} ~{len(changed)}")
                 
-                # === 1. КАНАЛ ===
                 rare_msg = format_rare_stock_for_channel(data)
                 if rare_msg:
                     try:
@@ -700,7 +676,6 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                     except Exception as e:
                         logger.error(f"❌ Не отправлено в канал {CHANNEL_ID}: {e}")
                 
-                # === 2. ЛС ===
                 for user_id, settings in user_settings.items():
                     subscriptions = settings.get("subscriptions", [])
                     if not subscriptions:
@@ -725,7 +700,6 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                         except Exception as e:
                             logger.error(f"❌ Не отправлено в ЛС {user_id}: {e}")
                 
-                # === 3. ГРУППА ===
                 for chat_id_str, settings in group_settings.items():
                     subscriptions = settings.get("subscriptions", [])
                     if not subscriptions:
@@ -769,8 +743,6 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CallbackQueryHandler(button_handler))
-    
-    # Фоновые задачи
     app.job_queue.run_repeating(check_and_notify, interval=60, first=10)
     app.job_queue.run_repeating(check_weather_and_notify, interval=30, first=5)
     
