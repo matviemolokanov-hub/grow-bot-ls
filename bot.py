@@ -156,7 +156,6 @@ def format_rare_stock_for_channel(data):
     return msg
 
 def format_group_stock_message(added_items, changed_items):
-    """Форматирует сообщение для группы по подпискам"""
     msk_time = get_msk_time()
     msg = f"📢 <b>Появился сток!</b>\n🕐 {msk_time.strftime('%H:%M:%S')} МСК\n\n"
     
@@ -311,13 +310,6 @@ def get_subscriptions_menu(user_id, page=0):
     keyboard.append([InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_menu")])
     return InlineKeyboardMarkup(keyboard)
 
-async def is_admin(update: Update, chat_id: int, user_id: int) -> bool:
-    try:
-        chat_member = await update.get_bot().get_chat_member(chat_id, user_id)
-        return chat_member.status in ['creator', 'administrator']
-    except:
-        return False
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     if user_id not in user_settings:
@@ -345,10 +337,6 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if user_id not in ADMIN_IDS:
         await update.message.reply_text("❌ У вас нет прав на использование админ-панели!")
-        return
-
-    if not await is_admin(update, chat_id, user_id):
-        await update.message.reply_text("❌ Вы должны быть администратором группы, чтобы использовать админ-панель!")
         return
 
     if str(chat_id) not in group_settings:
@@ -468,10 +456,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("admin_"):
         if int(user_id) not in ADMIN_IDS:
             await query.edit_message_text("❌ Нет прав!")
-            return
-        
-        if not await is_admin(update, chat_id, int(user_id)):
-            await query.edit_message_text("❌ Вы должны быть администратором группы!")
             return
         
         if data == "admin_close":
@@ -608,7 +592,6 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
         data = resp.json()
         new_stock_sig = get_stock_signature(data)
 
-        # === Редкий сток в канал (оставлено) ===
         rare_msg = format_rare_stock_for_channel(data)
         if rare_msg:
             try:
@@ -617,7 +600,6 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                     text=rare_msg,
                     parse_mode=ParseMode.HTML
                 )
-                logger.info("✅ Редкий сток отправлен в канал")
             except Exception as e:
                 logger.error(f"❌ Не отправлено в канал: {e}")
 
@@ -627,7 +609,6 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
             if added or removed or changed:
                 logger.info(f"Изменения: +{len(added)} -{len(removed)} ~{len(changed)}")
                 
-                # === ЛС пользователей ===
                 for user_id, settings in user_settings.items():
                     subscriptions = settings.get("subscriptions", [])
                     if not subscriptions:
@@ -651,7 +632,6 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                         except Exception as e:
                             logger.error(f"❌ Не отправлено в ЛС {user_id}: {e}")
                 
-                # === ГРУППЫ (только по подпискам) ===
                 for chat_id_str, settings in group_settings.items():
                     subscriptions = settings.get("subscriptions", [])
                     if not subscriptions:
