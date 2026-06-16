@@ -117,7 +117,7 @@ def get_changes(old, new):
     changed = {n: {'old': old[n], 'new': new[n]} for n in new if n in old and old[n] != new[n]}
     return added, removed, changed
 
-# ================= ФОРМАТИРОВАНИЕ СООБЩЕНИЙ =================
+# ================= ФОРМАТИРОВАНИЕ =================
 
 def format_rare_stock_for_channel(data):
     msk_time = get_msk_time()
@@ -565,7 +565,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         elif data == "admin_clear_all":
             group_settings[str(chat_id)] = {"subscriptions": []}
-            save_json(GROUP_SETTINGS_FILE, group_settings)
+            if save_json(GROUP_SETTINGS_FILE, group_settings):
+                logger.info(f"✅ Очищены подписки группы {chat_id}")
             await query.edit_message_text("👑 <b>Админ-панель</b>\n\nВсе подписки очищены!", parse_mode=ParseMode.HTML, reply_markup=get_admin_menu(chat_id))
             return
         
@@ -590,12 +591,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if action == "add":
                     if item_name not in subscriptions:
                         subscriptions.append(item_name)
+                        logger.info(f"✅ Добавлен {item_name} в группу {chat_id}")
                 else:
                     if item_name in subscriptions:
                         subscriptions.remove(item_name)
+                        logger.info(f"❌ Удалён {item_name} из группы {chat_id}")
                 
                 group_settings[str(chat_id)] = {"subscriptions": subscriptions}
-                save_json(GROUP_SETTINGS_FILE, group_settings)
+                if save_json(GROUP_SETTINGS_FILE, group_settings):
+                    logger.info(f"✅ Сохранены настройки группы {chat_id}")
+                
                 await query.edit_message_reply_markup(reply_markup=get_admin_items_menu(chat_id, category, action, page))
                 return
         
@@ -619,7 +624,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             group_settings[str(chat_id)] = {"subscriptions": subscriptions}
             
             if save_json(GROUP_SETTINGS_FILE, group_settings):
-                logger.info(f"Сохранены настройки группы {chat_id}")
+                logger.info(f"✅ Удалён {item_name} из группы {chat_id}")
             
             if subscriptions:
                 await query.edit_message_text(
