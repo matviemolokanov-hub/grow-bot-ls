@@ -11,8 +11,8 @@ import time
 # ================= НАСТРОЙКИ =================
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 API_URL = "https://grow-a-garden-2-tracker.onrender.com/api/stock"
-CHANNEL_ID = -1003755798218  # ID группы (с -100)
-MESSAGE_THREAD_ID = 5995      # ID темы
+CHANNEL_ID = -1003755798218          # ID группы
+MESSAGE_THREAD_ID = 5995              # ID темы "Стоки"
 DATA_FILE = "user_settings.json"
 GROUP_SETTINGS_FILE = "group_settings.json"
 ITEMS_CACHE_FILE = "items_cache.json"
@@ -65,7 +65,7 @@ user_settings = load_json(DATA_FILE, {})
 group_settings = load_json(GROUP_SETTINGS_FILE, {})
 all_items = {}
 last_stock_data = None
-_last_rare_message = None
+_last_rare_signature = None  # ← Храним подпись последнего редкого стока
 _items_cache_time = 0
 
 # ================= КЕШИРОВАНИЕ =================
@@ -107,13 +107,27 @@ def load_items():
     return all_items
 
 def get_stock_signature(data):
+    """Создаёт подпись ТОЛЬКО для редких предметов (без updatedAt)"""
     signature = {}
-    for shop_type in ["SeedShop_Normal", "CrateShop", "GearShop"]:
+    
+    # Только те категории, которые отправляются в канал
+    for shop_type in ["SeedShop_Normal", "GearShop"]:
         for item in data.get("shops", {}).get(shop_type, []):
-            signature[item.get('name')] = item.get('stock', 0)
+            name = item.get('name')
+            rarity = item.get('rarity', 'Common')
+            stock = item.get('stock', 0)
+            
+            # Проверяем, является ли предмет редким или в списке FORCED_ITEMS
+            if (rarity in RARE_RARITIES or name in FORCED_ITEMS) and stock > 0:
+                signature[f"{shop_type}_{name}"] = {
+                    'name': name,
+                    'rarity': rarity,
+                    'stock': stock
+                }
+    
     return signature
 
-def get_changes(old, new):
+def get_all_changes(old, new):
     added = {n: s for n, s in new.items() if n not in old}
     removed = {n: s for n, s in old.items() if n not in new}
     changed = {n: {'old': old[n], 'new': new[n]} for n in new if n in old and old[n] != new[n]}
@@ -122,7 +136,7 @@ def get_changes(old, new):
 # ================= ФОРМАТИРОВАНИЕ =================
 
 def format_rare_stock_for_channel(data):
-    """Улучшенное сообщение для канала/темы с разделителями и эмодзи"""
+    """Форматирует сообщение для канала/темы"""
     msk_time = get_msk_time()
     
     category_emojis = {
@@ -171,7 +185,7 @@ def format_rare_stock_for_channel(data):
     return msg
 
 def format_group_stock_message(added, changed, removed):
-    """Улучшенное сообщение для группы с категориями и редкостью"""
+    """Сообщение для группы"""
     msk_time = get_msk_time()
     
     cat_emojis = {
@@ -655,7 +669,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ================= ФОНОВАЯ ПРОВЕРКА =================
 async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
-    global last_stock_data, _last_rare_message
+    global last_stock_data, _last_rare_signature
     try:
         resp = requests.get(API_URL, timeout=15)
         if resp.status_code != 200:
@@ -665,28 +679,32 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
         new_stock_sig = get_stock_signature(data)
 
         # === КАНАЛ/ТЕМА (только редкие) ===
-        rare_msg = format_rare_stock_for_channel(data)
-        if rare_msg:
-            if rare_msg != _last_rare_message:
+        # Создаём подпись текущего редкого стока
+        current_rare_sig = json.dumps(new_stock_sig, sort_keys=True)
+        
+        # Если редкий сток изменился
+        if current_rare_sig != _last_rare_signature:
+            rare_msg = format_rare_stock_for_channel(data)
+            if rare_msg:
                 try:
                     await context.bot.send_message(
                         chat_id=CHANNEL_ID,
-                        message_thread_id=MESSAGE_THREAD_ID,  # ← Отправка в тему
+                        message_thread_id=MESSAGE_THREAD_ID,
                         text=rare_msg,
                         parse_mode=ParseMode.HTML
                     )
-                    _last_rare_message = rare_msg
+                    _last_rare_signature = current_rare_sig
                     logger.info(f"✅ Редкий сток отправлен в тему {MESSAGE_THREAD_ID}")
                 except Exception as e:
                     logger.error(f"❌ Ошибка отправки в тему: {e}")
-            else:
-                logger.info("⏸ Редкий сток не изменился (дубль пропущен)")
+        else:
+            logger.info("⏸ Редкий сток не изменился (отправка пропущена)")
 
         if last_stock_data is None:
             last_stock_data = new_stock_sig
             return
 
-        added, removed, changed = get_changes(last_stock_data, new_stock_sig)
+        added, removed, changed = get_all_changes(last_stock_data, new_stock_sig)
 
         if added or removed or changed:
             logger.info(f"Изменения: +{len(added)} -{len(removed)} ~{len(changed)}")
