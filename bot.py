@@ -158,92 +158,37 @@ def format_rare_stock_for_channel(data):
     return msg
 
 def format_group_stock_message(added_items, changed_items, removed_items=None):
-    """Форматирует сообщение для группы (только текущее количество)"""
+    """Форматирует сообщение для группы"""
     msk_time = get_msk_time()
-    
-    cat_emojis = {
-        "Семена": "🌾",
-        "Ящики": "📦",
-        "Снаряжение": "⚙️"
-    }
-    
-    rarity_emojis = {
-        "Common": "🟢",
-        "Rare": "🔵",
-        "Epic": "🟣",
-        "Legendary": "⭐",
-        "Mythic": "🔮",
-        "Super": "🌟"
-    }
-    
-    categories = {}
-    
-    for name, stock in added_items.items():
-        info = all_items.get(name, {})
-        cat = info.get('category', 'Неизвестно')
-        if cat not in categories:
-            categories[cat] = {'added': [], 'changed': [], 'removed': []}
-        categories[cat]['added'].append((name, stock, info.get('rarity', 'Common')))
-    
-    for name, change in changed_items.items():
-        info = all_items.get(name, {})
-        cat = info.get('category', 'Неизвестно')
-        if cat not in categories:
-            categories[cat] = {'added': [], 'changed': [], 'removed': []}
-        categories[cat]['changed'].append((name, change['new'], info.get('rarity', 'Common')))
-    
-    if removed_items:
-        for name in removed_items:
-            info = all_items.get(name, {})
-            cat = info.get('category', 'Неизвестно')
-            if cat not in categories:
-                categories[cat] = {'added': [], 'changed': [], 'removed': []}
-            categories[cat]['removed'].append((name, info.get('rarity', 'Common')))
-    
-    msg = "📢 <b>ОБНОВЛЕНИЕ СТОКА!</b>\n"
-    msg += f"🕐 {msk_time.strftime('%H:%M:%S')} МСК\n"
-    msg += "─" * 25 + "\n\n"
-    
-    has_changes = False
-    
-    for category, items in categories.items():
-        cat_emoji = cat_emojis.get(category, "📌")
-        msg += f"{cat_emoji} <b>{category}</b>\n"
-        
-        if items['added']:
-            for name, stock, rarity in items['added']:
-                rarity_emoji = rarity_emojis.get(rarity, "⚪")
-                msg += f"  🟢 {rarity_emoji} {name} — <b>{stock} шт.</b> ({rarity})\n"
-            has_changes = True
-        
-        if items['changed']:
-            for name, stock, rarity in items['changed']:
-                rarity_emoji = rarity_emojis.get(rarity, "⚪")
-                msg += f"  🟡 {rarity_emoji} {name} — <b>{stock} шт.</b> ({rarity})\n"
-            has_changes = True
-        
-        if items['removed']:
-            for name, rarity in items['removed']:
-                rarity_emoji = rarity_emojis.get(rarity, "⚪")
-                msg += f"  🔴 {rarity_emoji} {name} ({rarity})\n"
-            has_changes = True
-        
+    msg = f"📢 <b>ОБНОВЛЕНИЕ СТОКА!</b>\n🕐 {msk_time.strftime('%H:%M:%S')} МСК\n\n"
+
+    if added_items:
+        msg += "🟢 <b>Появились:</b>\n"
+        for name, stock in added_items.items():
+            msg += f"• {name} — {stock} шт.\n"
         msg += "\n"
-    
-    if not has_changes:
-        msg += "✅ Изменений нет\n"
-    
-    msg += "\n🤖 Наш бот: @growagardenstock235_bot"
-    
+
+    if changed_items:
+        msg += "🟡 <b>Изменилось количество:</b>\n"
+        for name, change in changed_items.items():
+            msg += f"• {name}: {change['old']} → {change['new']} шт.\n"
+        msg += "\n"
+
+    if removed_items:
+        msg += "🔴 <b>Пропали:</b>\n"
+        for name in removed_items:
+            msg += f"• {name}\n"
+        msg += "\n"
+
+    msg += "🤖 Наш бот: @growagardenstock235_bot"
     return msg
 
 def format_full_stock_message(data):
-    """Форматирует полный сток"""
     msk_time = get_msk_time()
     msg = f"📦 <b>ТЕКУЩИЙ СТОК Grow a Garden 2</b>\n🕐 {msk_time.strftime('%H:%M:%S')} МСК\n\n"
-    for shop_type, shop_name in [("SeedShop_Normal", "🌾 Семена"), 
-                                   ("CrateShop", "📦 Ящики"), 
-                                   ("GearShop", "⚙️ Снаряжение")]:
+    for shop_type, shop_name in [("SeedShop_Normal", "🌾 Семена"),
+                                 ("CrateShop", "📦 Ящики"),
+                                 ("GearShop", "⚙️ Снаряжение")]:
         msg += f"{shop_name}:\n"
         has = False
         for item in data.get("shops", {}).get(shop_type, []):
@@ -392,6 +337,8 @@ def get_subscriptions_menu(user_id, page=0):
 
     keyboard.append([InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_menu")])
     return InlineKeyboardMarkup(keyboard)
+
+# ================= ОБРАБОТЧИКИ =================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
@@ -675,6 +622,7 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
         data = resp.json()
         new_stock_sig = get_stock_signature(data)
 
+        # Отправка редкого стока в канал
         rare_msg = format_rare_stock_for_channel(data)
         if rare_msg:
             try:
@@ -687,58 +635,61 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"❌ Не отправлено в канал: {e}")
 
-        if last_stock_data is not None:
-            added, removed, changed = get_changes(last_stock_data, new_stock_sig)
-            
-            if added or removed or changed:
-                logger.info(f"Изменения: +{len(added)} -{len(removed)} ~{len(changed)}")
-                
-                # === ЛС ===
-                for user_id, settings in user_settings.items():
-                    subscriptions = settings.get("subscriptions", [])
-                    if not subscriptions:
-                        continue
-                    
-                    user_added = {n: s for n, s in added.items() if n in subscriptions}
-                    user_removed = {n: s for n, s in removed.items() if n in subscriptions}
-                    user_changed = {n: c for n, c in changed.items() if n in subscriptions}
-                    
-                    if user_added or user_removed or user_changed:
-                        msg = f"📢 <b>Изменения в стоке!</b>\n🕐 {get_msk_time().strftime('%H:%M:%S')} МСК\n\n"
-                        if user_added:
-                            msg += "🟢 <b>Появились:</b>\n" + "\n".join([f"• {n} — {s} шт." for n, s in user_added.items()]) + "\n\n"
-                        if user_changed:
-                            msg += "🟡 <b>Изменилось количество:</b>\n" + "\n".join([f"• {n}: {c['old']} → {c['new']} шт." for n, c in user_changed.items()]) + "\n\n"
-                        if user_removed:
-                            msg += "🔴 <b>Пропали:</b>\n" + "\n".join([f"• {n}" for n in user_removed]) + "\n"
-                        
-                        try:
-                            await context.bot.send_message(int(user_id), msg, parse_mode=ParseMode.HTML)
-                            logger.info(f"✅ Уведомление отправлено в ЛС {user_id}")
-                        except Exception as e:
-                            logger.error(f"❌ Не отправлено в ЛС {user_id}: {e}")
-                
-                # === ГРУППА ===
-                for chat_id_str, settings in group_settings.items():
-                    subscriptions = settings.get("subscriptions", [])
-                    if not subscriptions:
-                        continue
-                    
-                    group_added = {n: s for n, s in added.items() if n in subscriptions}
-                    group_removed = {n: s for n, s in removed.items() if n in subscriptions}
-                    group_changed = {n: c for n, c in changed.items() if n in subscriptions}
-                    
-                    if group_added or group_removed or group_changed:
-                        msg = format_group_stock_message(group_added, group_changed, group_removed)
-                        
-                        try:
-                            await context.bot.send_message(int(chat_id_str), msg, parse_mode=ParseMode.HTML)
-                            logger.info(f"✅ Уведомление отправлено в группу {chat_id_str}")
-                        except Exception as e:
-                            logger.error(f"❌ Не отправлено в группу {chat_id_str}: {e}")
-        
+        # Инициализация при первом запуске
+        if last_stock_data is None:
+            last_stock_data = new_stock_sig
+            logger.info("Первый запуск — сохранён текущий сток")
+            return
+
+        added, removed, changed = get_changes(last_stock_data, new_stock_sig)
+
+        if added or removed or changed:
+            logger.info(f"Изменения: +{len(added)} -{len(removed)} ~{len(changed)}")
+
+            # === ГРУППЫ ===
+            for chat_id_str, settings in group_settings.items():
+                subscriptions = settings.get("subscriptions", [])
+                if not subscriptions:
+                    continue
+
+                group_added = {n: s for n, s in added.items() if n in subscriptions}
+                group_changed = {n: c for n, c in changed.items() if n in subscriptions}
+                group_removed = {n for n in removed if n in subscriptions}
+
+                if group_added or group_changed or group_removed:
+                    msg = format_group_stock_message(group_added, group_changed, group_removed)
+                    try:
+                        await context.bot.send_message(int(chat_id_str), msg, parse_mode=ParseMode.HTML)
+                        logger.info(f"✅ Уведомление отправлено в группу {chat_id_str}")
+                    except Exception as e:
+                        logger.error(f"❌ Не отправлено в группу {chat_id_str}: {e}")
+
+            # === ЛС пользователей ===
+            for user_id, settings in user_settings.items():
+                subscriptions = settings.get("subscriptions", [])
+                if not subscriptions:
+                    continue
+
+                user_added = {n: s for n, s in added.items() if n in subscriptions}
+                user_removed = {n: s for n, s in removed.items() if n in subscriptions}
+                user_changed = {n: c for n, c in changed.items() if n in subscriptions}
+
+                if user_added or user_removed or user_changed:
+                    msg = f"📢 <b>Изменения в стоке!</b>\n🕐 {get_msk_time().strftime('%H:%M:%S')} МСК\n\n"
+                    if user_added:
+                        msg += "🟢 <b>Появились:</b>\n" + "\n".join([f"• {n} — {s} шт." for n, s in user_added.items()]) + "\n\n"
+                    if user_changed:
+                        msg += "🟡 <b>Изменилось количество:</b>\n" + "\n".join([f"• {n}: {c['old']} → {c['new']} шт." for n, c in user_changed.items()]) + "\n\n"
+                    if user_removed:
+                        msg += "🔴 <b>Пропали:</b>\n" + "\n".join([f"• {n}" for n in user_removed]) + "\n"
+
+                    try:
+                        await context.bot.send_message(int(user_id), msg, parse_mode=ParseMode.HTML)
+                    except Exception as e:
+                        logger.error(f"❌ Не отправлено в ЛС {user_id}: {e}")
+
         last_stock_data = new_stock_sig
-            
+
     except Exception as e:
         logger.error(f"Ошибка проверки: {e}")
 
