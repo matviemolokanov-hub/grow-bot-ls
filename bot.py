@@ -146,7 +146,7 @@ def format_rare_stock_for_channel(data):
     return msg
 
 def format_group_stock_message(added, changed, removed):
-    """Улучшенное сообщение для группы с категориями и редкостью"""
+    """Улучшенное сообщение для группы с категориями и редкостью (точки вместо кружочков)"""
     msk_time = get_msk_time()
     
     cat_emojis = {
@@ -175,11 +175,12 @@ def format_group_stock_message(added, changed, removed):
         categories[cat]['added'].append((name, stock, info.get('rarity', 'Common')))
     
     for name, change in changed.items():
-        info = all_items.get(name, {})
-        cat = info.get('category', 'Неизвестно')
-        if cat not in categories:
-            categories[cat] = {'added': [], 'changed': [], 'removed': []}
-        categories[cat]['changed'].append((name, change['new'], info.get('rarity', 'Common')))
+        if change['new'] > 0:  # Не показываем 0
+            info = all_items.get(name, {})
+            cat = info.get('category', 'Неизвестно')
+            if cat not in categories:
+                categories[cat] = {'added': [], 'changed': [], 'removed': []}
+            categories[cat]['changed'].append((name, change['new'], info.get('rarity', 'Common')))
     
     for name in removed:
         info = all_items.get(name, {})
@@ -200,20 +201,20 @@ def format_group_stock_message(added, changed, removed):
         
         if items['added']:
             for name, stock, rarity in items['added']:
-                rarity_emoji = rarity_emojis.get(rarity, "⚪")
-                msg += f"  🟢 {rarity_emoji} {name} — <b>{stock} шт.</b> ({rarity})\n"
+                rarity_emoji = rarity_emojis.get(rarity, "")
+                msg += f"  • {rarity_emoji} {name} — <b>{stock} шт.</b> ({rarity})\n"
             has_changes = True
         
         if items['changed']:
             for name, stock, rarity in items['changed']:
-                rarity_emoji = rarity_emojis.get(rarity, "⚪")
-                msg += f"  🟡 {rarity_emoji} {name} — <b>{stock} шт.</b> ({rarity})\n"
+                rarity_emoji = rarity_emojis.get(rarity, "")
+                msg += f"  • {rarity_emoji} {name} — <b>{stock} шт.</b> ({rarity})\n"
             has_changes = True
         
         if items['removed']:
             for name, rarity in items['removed']:
-                rarity_emoji = rarity_emojis.get(rarity, "⚪")
-                msg += f"  🔴 {rarity_emoji} {name} ({rarity})\n"
+                rarity_emoji = rarity_emojis.get(rarity, "")
+                msg += f"  • {rarity_emoji} {name} ({rarity})\n"
             has_changes = True
         
         msg += "\n"
