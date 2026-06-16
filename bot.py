@@ -9,7 +9,7 @@ import os
 import time
 from threading import Thread
 
-# ================= НАСТРОЙКИ =================
+# ================= НАСТРОЙКИ ================
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 API_URL = "https://grow-a-garden-2-tracker.onrender.com/api/stock"
 DATA_FILE = "user_settings.json"
