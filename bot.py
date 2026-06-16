@@ -25,6 +25,7 @@ RARE_RARITIES = ["Legendary", "Mythic", "Super"]
 
 # ================= КОНКРЕТНЫЕ ПРЕДМЕТЫ ДЛЯ ОТПРАВКИ =================
 FORCED_ITEMS = [
+    "Mushroom",
     "Moon Bloom",
     "Legendary Sprinkler",
     "Super Watering Can",
