@@ -8,7 +8,7 @@ from telegram.constants import ParseMode
 import os
 import time
 
-# ================= НАСТРОЙКИ =================
+# ================= НАСТРОЙКИ ================
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 API_URL = "https://grow-a-garden-2-tracker.onrender.com/api/stock"
 CHANNEL_ID = -1003618091927
