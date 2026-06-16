@@ -158,29 +158,86 @@ def format_rare_stock_for_channel(data):
     return msg
 
 def format_group_stock_message(added_items, changed_items, removed_items=None):
-    """Форматирует сообщение для группы"""
+    """Форматирует сообщение для группы в новом стиле"""
     msk_time = get_msk_time()
-    msg = f"📢 <b>ОБНОВЛЕНИЕ СТОКА!</b>\n🕐 {msk_time.strftime('%H:%M:%S')} МСК\n\n"
-
-    if added_items:
-        msg += "🟢 <b>Появились:</b>\n"
-        for name, stock in added_items.items():
-            msg += f"• {name} — {stock} шт.\n"
-        msg += "\n"
-
-    if changed_items:
-        msg += "🟡 <b>Изменилось количество:</b>\n"
-        for name, change in changed_items.items():
-            msg += f"• {name}: {change['old']} → {change['new']} шт.\n"
-        msg += "\n"
-
+    
+    cat_emojis = {
+        "Семена": "🌾",
+        "Ящики": "📦",
+        "Снаряжение": "⚙️"
+    }
+    
+    rarity_emojis = {
+        "Common": "🟢",
+        "Rare": "🔵",
+        "Epic": "🟣",
+        "Legendary": "⭐",
+        "Mythic": "🔮",
+        "Super": "🌟"
+    }
+    
+    categories = {}
+    
+    # Добавленные
+    for name, stock in added_items.items():
+        info = all_items.get(name, {})
+        cat = info.get('category', 'Неизвестно')
+        if cat not in categories:
+            categories[cat] = {'added': [], 'changed': [], 'removed': []}
+        categories[cat]['added'].append((name, stock, info.get('rarity', 'Common')))
+    
+    # Изменившиеся
+    for name, change in changed_items.items():
+        info = all_items.get(name, {})
+        cat = info.get('category', 'Неизвестно')
+        if cat not in categories:
+            categories[cat] = {'added': [], 'changed': [], 'removed': []}
+        categories[cat]['changed'].append((name, change['new'], info.get('rarity', 'Common')))
+    
+    # Пропавшие
     if removed_items:
-        msg += "🔴 <b>Пропали:</b>\n"
         for name in removed_items:
-            msg += f"• {name}\n"
+            info = all_items.get(name, {})
+            cat = info.get('category', 'Неизвестно')
+            if cat not in categories:
+                categories[cat] = {'added': [], 'changed': [], 'removed': []}
+            categories[cat]['removed'].append((name, info.get('rarity', 'Common')))
+    
+    msg = "📢 <b>ОБНОВЛЕНИЕ СТОКА!</b>\n"
+    msg += f"🕐 {msk_time.strftime('%H:%M:%S')} МСК\n"
+    msg += "─────────────────────────\n\n"
+    
+    has_changes = False
+    
+    for category, items in categories.items():
+        cat_emoji = cat_emojis.get(category, "📌")
+        msg += f"{cat_emoji} <b>{category}</b>\n"
+        
+        # Добавленные
+        for name, stock, rarity in items.get('added', []):
+            r_emoji = rarity_emojis.get(rarity, "⚪")
+            msg += f"  🟢 {r_emoji} {name} — <b>{stock} шт.</b> ({rarity})\n"
+            has_changes = True
+        
+        # Изменившиеся
+        for name, stock, rarity in items.get('changed', []):
+            r_emoji = rarity_emojis.get(rarity, "⚪")
+            msg += f"  🟡 {r_emoji} {name} — <b>{stock} шт.</b> ({rarity})\n"
+            has_changes = True
+        
+        # Пропавшие
+        for name, rarity in items.get('removed', []):
+            r_emoji = rarity_emojis.get(rarity, "⚪")
+            msg += f"  🔴 {r_emoji} {name} ({rarity})\n"
+            has_changes = True
+        
         msg += "\n"
-
+    
+    if not has_changes:
+        msg += "✅ Изменений нет\n\n"
+    
     msg += "🤖 Наш бот: @growagardenstock235_bot"
+    
     return msg
 
 def format_full_stock_message(data):
@@ -201,6 +258,8 @@ def format_full_stock_message(data):
     return msg
 
 # ================= КНОПКИ И МЕНЮ =================
+# (все функции меню оставлены без изменений)
+
 def get_main_menu():
     keyboard = [
         [InlineKeyboardButton("🌾 Семена", callback_data="category_Семена")],
@@ -622,7 +681,6 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
         data = resp.json()
         new_stock_sig = get_stock_signature(data)
 
-        # Отправка редкого стока в канал
         rare_msg = format_rare_stock_for_channel(data)
         if rare_msg:
             try:
@@ -635,10 +693,8 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"❌ Не отправлено в канал: {e}")
 
-        # Инициализация при первом запуске
         if last_stock_data is None:
             last_stock_data = new_stock_sig
-            logger.info("Первый запуск — сохранён текущий сток")
             return
 
         added, removed, changed = get_changes(last_stock_data, new_stock_sig)
