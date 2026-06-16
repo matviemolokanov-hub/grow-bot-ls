@@ -1,7 +1,7 @@
 import requests
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from telegram.constants import ParseMode
@@ -39,10 +39,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ================= ВРЕМЯ МСК =================
+def get_msk_time():
+    """Возвращает текущее время по МСК (UTC+3)"""
+    return datetime.now(timezone(timedelta(hours=3)))
+
 # ================= СОХРАНЕНИЕ НАСТРОЕК =================
 
 def load_json(filename, default=None):
-    """Загружает данные из JSON файла"""
     try:
         with open(filename, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -50,13 +54,11 @@ def load_json(filename, default=None):
         return default if default is not None else {}
 
 def save_json(filename, data):
-    """Сохраняет данные в JSON файл"""
     with open(filename, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-# Загружаем настройки при старте
-user_settings = load_json(DATA_FILE, {})       # Настройки пользователей (подписки)
-group_settings = load_json(GROUP_SETTINGS_FILE, {})  # Настройки групп (подписки для группы)
+user_settings = load_json(DATA_FILE, {})
+group_settings = load_json(GROUP_SETTINGS_FILE, {})
 all_items = {}
 last_stock_data = None
 _items_cache_time = 0
@@ -119,20 +121,23 @@ def get_changes(old, new):
     return added, removed, changed
 
 def format_rare_stock_for_channel(data):
-    """Форматирует редкие предметы для канала"""
+    """Форматирует редкие предметы для канала с МСК временем"""
+    msk_time = get_msk_time()
+    
     emojis = {
         "SeedShop_Normal": "🌱",
         "GearShop": "⚙️"
     }
     
     rarity_emojis = {
+        "Epic": "🟣",
         "Legendary": "⭐",
         "Mythic": "🔮",
         "Super": "🌟"
     }
     
     msg = "🔥 <b>ОБНАРУЖЕН РЕДКИЙ СТОК!</b>\n"
-    msg += f"🕐 {datetime.now().strftime('%H:%M:%S')}\n\n"
+    msg += f"🕐 {msk_time.strftime('%H:%M:%S')} МСК\n\n"
     
     has_rare = False
     
@@ -160,7 +165,9 @@ def format_rare_stock_for_channel(data):
     return msg
 
 def format_full_stock_message(data):
-    msg = f"📦 <b>ТЕКУЩИЙ СТОК Grow a Garden 2</b>\n🕐 {datetime.now().strftime('%H:%M:%S')}\n\n"
+    """Форматирует полный сток с МСК временем"""
+    msk_time = get_msk_time()
+    msg = f"📦 <b>ТЕКУЩИЙ СТОК Grow a Garden 2</b>\n🕐 {msk_time.strftime('%H:%M:%S')} МСК\n\n"
     for shop_type, shop_name in [("SeedShop_Normal", "🌾 Семена"), 
                                    ("CrateShop", "📦 Ящики"), 
                                    ("GearShop", "⚙️ Снаряжение")]:
@@ -321,12 +328,8 @@ async def is_admin(update: Update, chat_id: int, user_id: int) -> bool:
     except:
         return False
 
-# ================= КОМАНДЫ =================
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
-    
-    # Сохраняем настройки пользователя
     if user_id not in user_settings:
         user_settings[user_id] = {"subscriptions": []}
         save_json(DATA_FILE, user_settings)
@@ -355,17 +358,18 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if not await is_admin(update, chat_id, user_id):
-        await update.message.reply_text("❌ Вы должны быть администратором группы!")
+        await update.message.reply_text("❌ Вы должны быть администратором группы, чтобы использовать админ-панель!")
         return
     
-    # Сохраняем настройки группы
     if str(chat_id) not in group_settings:
         group_settings[str(chat_id)] = {"subscriptions": []}
         save_json(GROUP_SETTINGS_FILE, group_settings)
     
     await update.message.reply_text(
         "👑 <b>Админ-панель</b>\n\n"
-        "Настрой предметы для отправки в группу.",
+        "Здесь ты можешь настроить, какие предметы будут автоматически отправляться в эту группу при появлении в стоке.\n\n"
+        "✅ — предмет уже в списке\n"
+        "❌ — не в списке",
         parse_mode=ParseMode.HTML,
         reply_markup=get_admin_menu(chat_id)
     )
@@ -645,7 +649,7 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                     user_changed = {n: c for n, c in changed.items() if n in subscriptions}
                     
                     if user_added or user_removed or user_changed:
-                        msg = f"📢 <b>Изменения в стоке!</b>\n🕐 {datetime.now().strftime('%H:%M:%S')}\n\n"
+                        msg = f"📢 <b>Изменения в стоке!</b>\n🕐 {get_msk_time().strftime('%H:%M:%S')} МСК\n\n"
                         if user_added:
                             msg += "🟢 <b>Появились:</b>\n" + "\n".join([f"• {n} — {s} шт." for n, s in user_added.items()]) + "\n\n"
                         if user_changed:
@@ -670,7 +674,7 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                     group_changed = {n: c for n, c in changed.items() if n in subscriptions}
                     
                     if group_added or group_removed or group_changed:
-                        msg = f"📢 <b>Изменения в стоке!</b>\n🕐 {datetime.now().strftime('%H:%M:%S')}\n\n"
+                        msg = f"📢 <b>Изменения в стоке!</b>\n🕐 {get_msk_time().strftime('%H:%M:%S')} МСК\n\n"
                         
                         if group_added:
                             msg += "🟢 <b>Появились:</b>\n" + "\n".join([f"• {n} — {s} шт." for n, s in group_added.items()]) + "\n\n"
