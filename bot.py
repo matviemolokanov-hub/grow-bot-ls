@@ -120,14 +120,36 @@ def get_changes(old, new):
 # ================= ФОРМАТИРОВАНИЕ =================
 
 def format_rare_stock_for_channel(data):
+    """Улучшенное сообщение для канала с разделителями и эмодзи"""
     msk_time = get_msk_time()
-    rarity_emojis = {"Epic": "🟣", "Legendary": "⭐", "Mythic": "🔮", "Super": "🌟"}
+    
+    # Эмодзи для категорий
+    category_emojis = {
+        "SeedShop_Normal": "🌱",
+        "GearShop": "⚙️"
+    }
+    
+    # Эмодзи для редкостей
+    rarity_emojis = {
+        "Epic": "🟣",
+        "Legendary": "⭐",
+        "Mythic": "🔮",
+        "Super": "🌟"
+    }
+    
+    # Названия категорий
+    category_names = {
+        "SeedShop_Normal": "СЕМЕНА",
+        "GearShop": "СНАРЯЖЕНИЕ"
+    }
 
     msg = "🔥 <b>ОБНАРУЖЕН РЕДКИЙ СТОК!</b>\n"
-    msg += f"🕐 {msk_time.strftime('%H:%M:%S')} МСК\n\n"
+    msg += f"🕐 {msk_time.strftime('%H:%M:%S')} МСК\n"
+    msg += "═" * 30 + "\n\n"
+    
     has_rare = False
 
-    for shop_type, shop_name in [("SeedShop_Normal", "🌱 Семена"), ("GearShop", "⚙️ Снаряжение")]:
+    for shop_type, shop_name in [("SeedShop_Normal", "Семена"), ("GearShop", "Снаряжение")]:
         rare_items = []
         for item in data.get("shops", {}).get(shop_type, []):
             name = item.get('name')
@@ -135,18 +157,22 @@ def format_rare_stock_for_channel(data):
             stock = item.get('stock', 0)
             if (rarity in RARE_RARITIES or name in FORCED_ITEMS) and stock > 0:
                 emoji = rarity_emojis.get(rarity, "⭐")
-                rare_items.append(f"{emoji} <b>{name}</b> — {stock} шт. ({rarity})")
+                rare_items.append(f"  {emoji} <b>{name}</b> — <b>{stock} шт.</b> ({rarity})")
                 has_rare = True
         if rare_items:
-            msg += f"{shop_name}:\n" + "\n".join(rare_items) + "\n\n"
+            cat_emoji = category_emojis.get(shop_type, "📌")
+            msg += f"{cat_emoji} <b>{category_names.get(shop_type, shop_name)}</b>\n"
+            msg += "\n".join(rare_items) + "\n\n"
 
     if not has_rare:
         return None
-    msg += "\n🤖 Наш бот: @growagardenstock235_bot"
+    
+    msg += "═" * 30 + "\n"
+    msg += "🤖 Наш бот: @growagardenstock235_bot"
     return msg
 
 def format_group_stock_message(added, changed, removed):
-    """Улучшенное сообщение для группы с категориями и редкостью (точки вместо кружочков)"""
+    """Улучшенное сообщение для группы с категориями и редкостью"""
     msk_time = get_msk_time()
     
     cat_emojis = {
@@ -156,15 +182,14 @@ def format_group_stock_message(added, changed, removed):
     }
     
     rarity_emojis = {
-        "Common": "🟢",
-        "Rare": "🔵",
-        "Epic": "🟣",
-        "Legendary": "⭐",
-        "Mythic": "🔮",
-        "Super": "🌟"
+        "Common": "",
+        "Rare": "",
+        "Epic": "",
+        "Legendary": "",
+        "Mythic": "",
+        "Super": ""
     }
-    
-    # Группируем по категориям
+
     categories = {}
     
     for name, stock in added.items():
@@ -175,7 +200,7 @@ def format_group_stock_message(added, changed, removed):
         categories[cat]['added'].append((name, stock, info.get('rarity', 'Common')))
     
     for name, change in changed.items():
-        if change['new'] > 0:  # Не показываем 0
+        if change['new'] > 0:
             info = all_items.get(name, {})
             cat = info.get('category', 'Неизвестно')
             if cat not in categories:
@@ -201,20 +226,17 @@ def format_group_stock_message(added, changed, removed):
         
         if items['added']:
             for name, stock, rarity in items['added']:
-                rarity_emoji = rarity_emojis.get(rarity, "")
-                msg += f"  • {rarity_emoji} {name} — <b>{stock} шт.</b> ({rarity})\n"
+                msg += f"  • {name} — <b>{stock} шт.</b> ({rarity})\n"
             has_changes = True
         
         if items['changed']:
             for name, stock, rarity in items['changed']:
-                rarity_emoji = rarity_emojis.get(rarity, "")
-                msg += f"  • {rarity_emoji} {name} — <b>{stock} шт.</b> ({rarity})\n"
+                msg += f"  • {name} — <b>{stock} шт.</b> ({rarity})\n"
             has_changes = True
         
         if items['removed']:
             for name, rarity in items['removed']:
-                rarity_emoji = rarity_emojis.get(rarity, "")
-                msg += f"  • {rarity_emoji} {name} ({rarity})\n"
+                msg += f"  • {name} ({rarity})\n"
             has_changes = True
         
         msg += "\n"
@@ -652,12 +674,14 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
         data = resp.json()
         new_stock_sig = get_stock_signature(data)
 
+        # === КАНАЛ (только редкие) ===
         rare_msg = format_rare_stock_for_channel(data)
         if rare_msg:
             try:
                 await context.bot.send_message(CHANNEL_ID, rare_msg, parse_mode=ParseMode.HTML)
+                logger.info("✅ Редкий сток отправлен в канал")
             except Exception as e:
-                logger.error(f"Ошибка отправки в канал: {e}")
+                logger.error(f"❌ Ошибка отправки в канал: {e}")
 
         if last_stock_data is None:
             last_stock_data = new_stock_sig
