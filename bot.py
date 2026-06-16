@@ -32,6 +32,17 @@ FORCED_ITEMS = [
     "Super Sprinkler"
 ]
 
+# ================= ТИПЫ ПОГОДЫ =================
+WEATHER_TYPES = {
+    "Rain": "🌧️ Дождь",
+    "Snow": "❄️ Снег",
+    "Storm": "⛈️ Гроза",
+    "BloodMoon": "🌕 Кровавая Луна",
+    "Starfall": "⭐ Звездопад",
+    "Midas": "✨ Золотой дождь",
+    "RainbowMoon": "🌈 Радужная Луна"
+}
+
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
@@ -62,6 +73,7 @@ group_settings = load_json(GROUP_SETTINGS_FILE, {})
 all_items = {}
 last_stock_data = None
 _items_cache_time = 0
+last_weather = None
 
 # ================= КЕШИРОВАНИЕ ПРЕДМЕТОВ =================
 
@@ -606,7 +618,57 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.edit_message_text("📋 <b>Нет подписок</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_menu(chat_id))
             return
 
-# ================= ФОНОВАЯ ПРОВЕРКА =================
+# ================= ПРОВЕРКА ПОГОДЫ =================
+
+async def check_weather_and_notify(context: ContextTypes.DEFAULT_TYPE):
+    """Проверяет погоду и отправляет уведомления в канал при изменениях"""
+    global last_weather
+    try:
+        resp = requests.get(API_URL, timeout=15)
+        if resp.status_code != 200:
+            logger.warning(f"API вернул код {resp.status_code}")
+            return
+        
+        data = resp.json()
+        weather = data.get('weather', {})
+        weathers = weather.get('weathers', {})
+        phase = weather.get('phase', 'Day')
+        
+        # Определяем текущую погоду
+        current = None
+        for key, name in WEATHER_TYPES.items():
+            if weathers.get(key):
+                current = name
+                break
+        
+        # Если есть особая погода и она изменилась
+        if current is not None:
+            if last_weather is None:
+                last_weather = current
+                return
+            
+            if current != last_weather:
+                msg = f"🌤️ <b>ПОГОДА ИЗМЕНИЛАСЬ!</b>\n\n{current}\n🕐 {get_msk_time().strftime('%H:%M:%S')} МСК"
+                
+                try:
+                    await context.bot.send_message(
+                        chat_id=CHANNEL_ID,
+                        text=msg,
+                        parse_mode=ParseMode.HTML
+                    )
+                    logger.info(f"✅ Погода отправлена в канал: {current}")
+                except Exception as e:
+                    logger.error(f"❌ Не отправлено в канал {CHANNEL_ID}: {e}")
+                
+                last_weather = current
+        else:
+            # Если особая погода закончилась — сбрасываем last_weather
+            last_weather = None
+            
+    except Exception as e:
+        logger.error(f"Ошибка проверки погоды: {e}")
+
+# ================= ФОНОВАЯ ПРОВЕРКА СТОКА =================
 
 async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
     global last_stock_data
@@ -707,7 +769,10 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CallbackQueryHandler(button_handler))
+    
+    # Фоновые задачи
     app.job_queue.run_repeating(check_and_notify, interval=60, first=10)
+    app.job_queue.run_repeating(check_weather_and_notify, interval=30, first=5)
     
     logger.info("✅ Бот запущен!")
     app.run_polling()
