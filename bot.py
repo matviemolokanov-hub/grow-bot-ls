@@ -7,15 +7,17 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 from telegram.constants import ParseMode
 import os
 import time
-from threading import Thread
 
-# ================= НАСТРОЙКИ ================
+# ================= НАСТРОЙКИ =================
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 API_URL = "https://grow-a-garden-2-tracker.onrender.com/api/stock"
 DATA_FILE = "user_settings.json"
 GROUP_SETTINGS_FILE = "group_settings.json"
 ITEMS_CACHE_FILE = "items_cache.json"
 CACHE_TTL = 300  # 5 минут
+
+# ================= АДМИНЫ =================
+ADMIN_IDS = [7632708290]  # Только эти пользователи могут использовать админ-панель
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -294,15 +296,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Админ-панель (только для владельца бота)"""
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
     
+    # Проверяем, что команда вызвана в группе
     if chat_id > 0:
-        await update.message.reply_text("❌ Эта команда работает только в группах!")
+        await update.message.reply_text("❌ Эта команда работает только в группах и каналах!")
         return
     
+    # Проверяем, является ли пользователь владельцем бота (по ID)
+    if user_id not in ADMIN_IDS:
+        await update.message.reply_text("❌ У вас нет прав на использование админ-панели!")
+        return
+    
+    # Дополнительная проверка: является ли пользователь админом группы
     if not await is_admin(update, chat_id, user_id):
-        await update.message.reply_text("❌ Только администраторы группы могут использовать эту команду!")
+        await update.message.reply_text("❌ Вы должны быть администратором группы, чтобы использовать админ-панель!")
         return
     
     if str(chat_id) not in group_settings:
@@ -311,7 +321,9 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         "👑 <b>Админ-панель</b>\n\n"
-        "Настрой предметы для автоматической отправки в группу.",
+        "Здесь ты можешь настроить, какие предметы будут автоматически отправляться в эту группу при появлении в стоке.\n\n"
+        "✅ — предмет уже в списке\n"
+        "❌ — не в списке",
         parse_mode=ParseMode.HTML,
         reply_markup=get_admin_menu(chat_id)
     )
@@ -426,28 +438,35 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # === АДМИН-ПАНЕЛЬ ===
     elif data.startswith("admin_"):
-        if not await is_admin(update, chat_id, int(user_id)):
-            await query.edit_message_text("❌ Только администраторы могут использовать админ-панель!")
+        # Проверяем, что пользователь — владелец бота
+        if int(user_id) not in ADMIN_IDS:
+            await query.edit_message_text("❌ У вас нет прав на использование админ-панели!")
             return
         
+        # Проверяем, что пользователь — админ группы
+        if not await is_admin(update, chat_id, int(user_id)):
+            await query.edit_message_text("❌ Вы должны быть администратором группы!")
+            return
+        
+        # Закрыть админ-панель
         if data == "admin_close":
             await query.edit_message_text("👑 Админ-панель закрыта", reply_markup=None)
             return
         
+        # Назад в админ-меню
         elif data == "admin_back":
             await query.edit_message_text(
-                "👑 <b>Админ-панель</b>\n\nВыбери действие:",
+                "👑 <b>Админ-панель</b>\n\n"
+                "Выбери действие:",
                 parse_mode=ParseMode.HTML,
-                reply_markup=get_admin_menu(chat_id)
-            )
+                reply_markup=get_admin_menu(chat_id))
             return
         
         elif data == "admin_back_to_categories":
             await query.edit_message_text(
                 "📂 <b>Выбери категорию:</b>",
                 parse_mode=ParseMode.HTML,
-                reply_markup=get_admin_category_menu(context.user_data.get('admin_action', 'add'))
-            )
+                reply_markup=get_admin_category_menu(context.user_data.get('admin_action', 'add')))
             return
         
         elif data == "admin_view_subs":
@@ -463,8 +482,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(
                 "📂 <b>Выбери категорию для добавления:</b>",
                 parse_mode=ParseMode.HTML,
-                reply_markup=get_admin_category_menu('add')
-            )
+                reply_markup=get_admin_category_menu('add'))
             return
         
         elif data == "admin_remove_items":
@@ -472,8 +490,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(
                 "📂 <b>Выбери категорию для удаления:</b>",
                 parse_mode=ParseMode.HTML,
-                reply_markup=get_admin_category_menu('remove')
-            )
+                reply_markup=get_admin_category_menu('remove'))
             return
         
         elif data == "admin_clear_all":
@@ -483,8 +500,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(
                 "👑 <b>Админ-панель</b>\n\nВсе подписки очищены!",
                 parse_mode=ParseMode.HTML,
-                reply_markup=get_admin_menu(chat_id)
-            )
+                reply_markup=get_admin_menu(chat_id))
             return
         
         elif data.startswith("admin_add_") or data.startswith("admin_remove_"):
