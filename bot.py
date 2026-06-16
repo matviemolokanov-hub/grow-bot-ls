@@ -17,7 +17,7 @@ ITEMS_CACHE_FILE = "items_cache.json"
 CACHE_TTL = 300  # 5 минут
 
 # ================= АДМИНЫ =================
-ADMIN_IDS = [7632708290]  # Только эти пользователи могут использовать админ-панель
+ADMIN_IDS = [7632708290, 5634818913]  # Только эти пользователи могут использовать админ-панель
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
