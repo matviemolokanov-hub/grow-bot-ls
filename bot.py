@@ -11,7 +11,7 @@ import time
 # ================= НАСТРОЙКИ =================
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 API_URL = "https://grow-a-garden-2-tracker.onrender.com/api/stock"
-CHANNEL_ID = --1003618091927  # ID вашего канала (с -100)
+CHANNEL_ID = -1003618091927  # ID вашего канала
 DATA_FILE = "user_settings.json"
 GROUP_SETTINGS_FILE = "group_settings.json"
 ITEMS_CACHE_FILE = "items_cache.json"
@@ -23,6 +23,14 @@ ADMIN_IDS = [7632708290, 5634818913]
 # ================= РЕДКИЕ РЕДКОСТИ =================
 RARE_RARITIES = ["Legendary", "Mythic", "Super"]
 
+# ================= КОНКРЕТНЫЕ ПРЕДМЕТЫ ДЛЯ ОТПРАВКИ =================
+FORCED_ITEMS = [
+    "Moon Bloom",
+    "Legendary Sprinkler",
+    "Super Watering Can",
+    "Super Sprinkler"
+]
+
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
@@ -30,7 +38,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ================= СОХРАНЕНИЕ НАСТРОЕК =================
+
 def load_json(filename, default=None):
+    """Загружает данные из JSON файла"""
     try:
         with open(filename, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -38,11 +49,13 @@ def load_json(filename, default=None):
         return default if default is not None else {}
 
 def save_json(filename, data):
+    """Сохраняет данные в JSON файл"""
     with open(filename, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-user_settings = load_json(DATA_FILE, {})
-group_settings = load_json(GROUP_SETTINGS_FILE, {})
+# Загружаем настройки при старте
+user_settings = load_json(DATA_FILE, {})       # Настройки пользователей (подписки)
+group_settings = load_json(GROUP_SETTINGS_FILE, {})  # Настройки групп (подписки для группы)
 all_items = {}
 last_stock_data = None
 _items_cache_time = 0
@@ -105,14 +118,12 @@ def get_changes(old, new):
     return added, removed, changed
 
 def format_rare_stock_for_channel(data):
-    """Форматирует редкие предметы для канала (только Legendary, Mythic, Super)"""
-    # Эмодзи для категорий
+    """Форматирует редкие предметы для канала"""
     emojis = {
         "SeedShop_Normal": "🌱",
         "GearShop": "⚙️"
     }
     
-    # Эмодзи для редкостей
     rarity_emojis = {
         "Legendary": "⭐",
         "Mythic": "🔮",
@@ -124,16 +135,15 @@ def format_rare_stock_for_channel(data):
     
     has_rare = False
     
-    # Только семена и снаряжение (без ящиков)
     for shop_type, shop_name in [("SeedShop_Normal", "🌱 Семена"), 
                                    ("GearShop", "⚙️ Снаряжение")]:
         rare_items = []
         for item in data.get("shops", {}).get(shop_type, []):
+            name = item.get('name')
             rarity = item.get('rarity', 'Common')
             stock = item.get('stock', 0)
-            name = item.get('name')
             
-            if rarity in RARE_RARITIES and stock > 0:
+            if (rarity in RARE_RARITIES or name in FORCED_ITEMS) and stock > 0:
                 rarity_emoji = rarity_emojis.get(rarity, "⭐")
                 rare_items.append(f"{rarity_emoji} <b>{name}</b> — {stock} шт. ({rarity})")
                 has_rare = True
@@ -145,9 +155,7 @@ def format_rare_stock_for_channel(data):
     if not has_rare:
         return None
     
-    # Добавляем ссылку на бота
     msg += "\n🤖 Наш бот: @growagardenstock235_bot"
-    
     return msg
 
 def format_full_stock_message(data):
@@ -312,8 +320,12 @@ async def is_admin(update: Update, chat_id: int, user_id: int) -> bool:
     except:
         return False
 
+# ================= КОМАНДЫ =================
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
+    
+    # Сохраняем настройки пользователя
     if user_id not in user_settings:
         user_settings[user_id] = {"subscriptions": []}
         save_json(DATA_FILE, user_settings)
@@ -342,18 +354,17 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if not await is_admin(update, chat_id, user_id):
-        await update.message.reply_text("❌ Вы должны быть администратором группы, чтобы использовать админ-панель!")
+        await update.message.reply_text("❌ Вы должны быть администратором группы!")
         return
     
+    # Сохраняем настройки группы
     if str(chat_id) not in group_settings:
         group_settings[str(chat_id)] = {"subscriptions": []}
         save_json(GROUP_SETTINGS_FILE, group_settings)
     
     await update.message.reply_text(
         "👑 <b>Админ-панель</b>\n\n"
-        "Здесь ты можешь настроить, какие предметы будут автоматически отправляться в эту группу при появлении в стоке.\n\n"
-        "✅ — предмет уже в списке\n"
-        "❌ — не в списке",
+        "Настрой предметы для отправки в группу.",
         parse_mode=ParseMode.HTML,
         reply_markup=get_admin_menu(chat_id)
     )
@@ -379,9 +390,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         items = load_items()
         await query.edit_message_text(
             "🌱 <b>Grow a Garden 2 Tracker</b>\n\n"
-            "Выбери категорию, затем нажми на предмет.\n"
-            "✅ — получать уведомления\n"
-            "❌ — не получать\n\n"
             f"📦 <b>Всего предметов:</b> {len(items)}",
             parse_mode=ParseMode.HTML,
             reply_markup=get_main_menu()
@@ -398,17 +406,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_markup=get_main_menu()
                 )
             else:
-                await query.edit_message_text("❌ Ошибка получения стока", reply_markup=get_main_menu())
+                await query.edit_message_text("❌ Ошибка", reply_markup=get_main_menu())
         except Exception as e:
-            await query.edit_message_text(f"❌ Ошибка: {e}", reply_markup=get_main_menu())
+            await query.edit_message_text(f"❌ {e}", reply_markup=get_main_menu())
         return
     
     elif data == "view_subscriptions":
         subscriptions = user_settings[user_id].get("subscriptions", [])
         if not subscriptions:
-            await query.edit_message_text("📋 <b>У тебя пока нет подписок</b>", parse_mode=ParseMode.HTML, reply_markup=get_main_menu())
+            await query.edit_message_text("📋 <b>Нет подписок</b>", parse_mode=ParseMode.HTML, reply_markup=get_main_menu())
         else:
-            await query.edit_message_text("📋 <b>Твои подписки</b>\n\nНажми на предмет, чтобы отписаться:", parse_mode=ParseMode.HTML, reply_markup=get_subscriptions_menu(user_id))
+            await query.edit_message_text("📋 <b>Твои подписки</b>", parse_mode=ParseMode.HTML, reply_markup=get_subscriptions_menu(user_id))
         return
     
     elif data.startswith("sub_page_"):
@@ -422,17 +430,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         subscriptions = [s for s in subscriptions if s != item_name]
         user_settings[user_id]["subscriptions"] = subscriptions
         save_json(DATA_FILE, user_settings)
-        await query.answer(f"❌ {item_name} удалён")
         if subscriptions:
             await query.edit_message_reply_markup(reply_markup=get_subscriptions_menu(user_id))
         else:
-            await query.edit_message_text("📋 <b>У тебя пока нет подписок</b>", parse_mode=ParseMode.HTML, reply_markup=get_main_menu())
+            await query.edit_message_text("📋 <b>Нет подписок</b>", parse_mode=ParseMode.HTML, reply_markup=get_main_menu())
         return
     
     elif data.startswith("category_"):
         category = data.replace("category_", "")
         await query.edit_message_text(
-            f"📂 <b>{category}</b>\n\n✅ — получать уведомления\n❌ — не получать",
+            f"📂 <b>{category}</b>",
             parse_mode=ParseMode.HTML,
             reply_markup=get_items_menu(user_id, category, 0)
         )
@@ -448,10 +455,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         subscriptions = user_settings[user_id].get("subscriptions", [])
         if item_name in subscriptions:
             subscriptions.remove(item_name)
-            await query.answer(f"❌ {item_name} — уведомления выключены")
         else:
             subscriptions.append(item_name)
-            await query.answer(f"✅ {item_name} — уведомления включены")
         
         user_settings[user_id]["subscriptions"] = subscriptions
         save_json(DATA_FILE, user_settings)
@@ -467,7 +472,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     elif data.startswith("admin_"):
         if int(user_id) not in ADMIN_IDS:
-            await query.edit_message_text("❌ У вас нет прав на использование админ-панели!")
+            await query.edit_message_text("❌ Нет прав!")
             return
         
         if not await is_admin(update, chat_id, int(user_id)):
@@ -480,7 +485,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         elif data == "admin_back":
             await query.edit_message_text(
-                "👑 <b>Админ-панель</b>\n\nВыбери действие:",
+                "👑 <b>Админ-панель</b>",
                 parse_mode=ParseMode.HTML,
                 reply_markup=get_admin_menu(chat_id))
             return
@@ -495,15 +500,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data == "admin_view_subs":
             subscriptions = group_settings.get(str(chat_id), {}).get("subscriptions", [])
             if not subscriptions:
-                await query.edit_message_text("📋 <b>В этой группе пока нет подписанных предметов</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_menu(chat_id))
+                await query.edit_message_text("📋 <b>Нет подписок</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_menu(chat_id))
             else:
-                await query.edit_message_text("📋 <b>Подписки группы</b>\n\nНажми на предмет, чтобы удалить:", parse_mode=ParseMode.HTML, reply_markup=get_admin_subscriptions_menu(chat_id))
+                await query.edit_message_text("📋 <b>Подписки группы</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_subscriptions_menu(chat_id))
             return
         
         elif data == "admin_add_items":
             context.user_data['admin_action'] = 'add'
             await query.edit_message_text(
-                "📂 <b>Выбери категорию для добавления:</b>",
+                "📂 <b>Выбери категорию:</b>",
                 parse_mode=ParseMode.HTML,
                 reply_markup=get_admin_category_menu('add'))
             return
@@ -511,7 +516,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data == "admin_remove_items":
             context.user_data['admin_action'] = 'remove'
             await query.edit_message_text(
-                "📂 <b>Выбери категорию для удаления:</b>",
+                "📂 <b>Выбери категорию:</b>",
                 parse_mode=ParseMode.HTML,
                 reply_markup=get_admin_category_menu('remove'))
             return
@@ -519,7 +524,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data == "admin_clear_all":
             group_settings[str(chat_id)] = {"subscriptions": []}
             save_json(GROUP_SETTINGS_FILE, group_settings)
-            await query.answer("🗑️ Все подписки группы очищены")
             await query.edit_message_text(
                 "👑 <b>Админ-панель</b>\n\nВсе подписки очищены!",
                 parse_mode=ParseMode.HTML,
@@ -534,7 +538,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if len(parts) == 3:
                 category_name = {"seed": "Семена", "crate": "Ящики", "gear": "Снаряжение"}.get(category, category)
                 await query.edit_message_text(
-                    f"📂 <b>{category_name}</b>\n\nНажми на предмет, чтобы {'добавить' if action == 'add' else 'удалить'}:",
+                    f"📂 <b>{category_name}</b>",
                     parse_mode=ParseMode.HTML,
                     reply_markup=get_admin_items_menu(chat_id, category_name, action, 0)
                 )
@@ -551,15 +555,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if action == "add":
                     if item_name not in subscriptions:
                         subscriptions.append(item_name)
-                        await query.answer(f"✅ {item_name} добавлен")
                     else:
                         await query.answer(f"⚠️ {item_name} уже в списке")
+                        return
                 else:
                     if item_name in subscriptions:
                         subscriptions.remove(item_name)
-                        await query.answer(f"❌ {item_name} удалён")
                     else:
                         await query.answer(f"⚠️ {item_name} не в списке")
+                        return
                 
                 group_settings[str(chat_id)] = {"subscriptions": subscriptions}
                 save_json(GROUP_SETTINGS_FILE, group_settings)
@@ -591,11 +595,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             subscriptions = [s for s in subscriptions if s != item_name]
             group_settings[str(chat_id)] = {"subscriptions": subscriptions}
             save_json(GROUP_SETTINGS_FILE, group_settings)
-            await query.answer(f"❌ {item_name} удалён")
             if subscriptions:
                 await query.edit_message_reply_markup(reply_markup=get_admin_subscriptions_menu(chat_id))
             else:
-                await query.edit_message_text("📋 <b>В этой группе пока нет подписанных предметов</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_menu(chat_id))
+                await query.edit_message_text("📋 <b>Нет подписок</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_menu(chat_id))
             return
 
 # ================= ФОНОВАЯ ПРОВЕРКА =================
@@ -617,7 +620,7 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
             if added or removed or changed:
                 logger.info(f"Изменения: +{len(added)} -{len(removed)} ~{len(changed)}")
                 
-                # === 1. ОТПРАВКА В КАНАЛ (ТОЛЬКО РЕДКИЕ СЕМЕНА И СНАРЯЖЕНИЕ) ===
+                # === 1. КАНАЛ ===
                 rare_msg = format_rare_stock_for_channel(data)
                 if rare_msg:
                     try:
@@ -630,7 +633,7 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                     except Exception as e:
                         logger.error(f"❌ Не отправлено в канал {CHANNEL_ID}: {e}")
                 
-                # === 2. ОТПРАВКА В ЛС ===
+                # === 2. ЛС ===
                 for user_id, settings in user_settings.items():
                     subscriptions = settings.get("subscriptions", [])
                     if not subscriptions:
@@ -655,7 +658,7 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                         except Exception as e:
                             logger.error(f"❌ Не отправлено в ЛС {user_id}: {e}")
                 
-                # === 3. ОТПРАВКА В ГРУППУ ===
+                # === 3. ГРУППА ===
                 for chat_id_str, settings in group_settings.items():
                     subscriptions = settings.get("subscriptions", [])
                     if not subscriptions:
