@@ -8,7 +8,7 @@ from telegram.constants import ParseMode
 import os
 import time
 
-# ================= НАСТРОЙКИ ================
+# ================= НАСТРОЙКИ =================
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 API_URL = "https://grow-a-garden-2-tracker.onrender.com/api/stock"
 CHANNEL_ID = -1003618091927
@@ -117,7 +117,7 @@ def get_changes(old, new):
     changed = {n: {'old': old[n], 'new': new[n]} for n in new if n in old and old[n] != new[n]}
     return added, removed, changed
 
-# ================= ФОРМАТИРОВАНИЕ =================
+# ================= ФОРМАТИРОВАНИЕ СООБЩЕНИЙ =================
 
 def format_rare_stock_for_channel(data):
     msk_time = get_msk_time()
@@ -146,29 +146,83 @@ def format_rare_stock_for_channel(data):
     return msg
 
 def format_group_stock_message(added, changed, removed):
+    """Улучшенное сообщение для группы с категориями и редкостью"""
     msk_time = get_msk_time()
-    msg = f"📢 <b>ОБНОВЛЕНИЕ СТОКА!</b>\n🕐 {msk_time.strftime('%H:%M:%S')} МСК\n"
-    msg += "─────────────────────────\n\n"
-
-    if added:
-        msg += "🟢 <b>Появились:</b>\n"
-        for name, stock in added.items():
-            msg += f"• {name} — {stock} шт.\n"
+    
+    cat_emojis = {
+        "Семена": "🌾",
+        "Ящики": "📦",
+        "Снаряжение": "⚙️"
+    }
+    
+    rarity_emojis = {
+        "Common": "🟢",
+        "Rare": "🔵",
+        "Epic": "🟣",
+        "Legendary": "⭐",
+        "Mythic": "🔮",
+        "Super": "🌟"
+    }
+    
+    # Группируем по категориям
+    categories = {}
+    
+    for name, stock in added.items():
+        info = all_items.get(name, {})
+        cat = info.get('category', 'Неизвестно')
+        if cat not in categories:
+            categories[cat] = {'added': [], 'changed': [], 'removed': []}
+        categories[cat]['added'].append((name, stock, info.get('rarity', 'Common')))
+    
+    for name, change in changed.items():
+        info = all_items.get(name, {})
+        cat = info.get('category', 'Неизвестно')
+        if cat not in categories:
+            categories[cat] = {'added': [], 'changed': [], 'removed': []}
+        categories[cat]['changed'].append((name, change['new'], info.get('rarity', 'Common')))
+    
+    for name in removed:
+        info = all_items.get(name, {})
+        cat = info.get('category', 'Неизвестно')
+        if cat not in categories:
+            categories[cat] = {'added': [], 'changed': [], 'removed': []}
+        categories[cat]['removed'].append((name, info.get('rarity', 'Common')))
+    
+    msg = "📢 <b>ОБНОВЛЕНИЕ СТОКА!</b>\n"
+    msg += f"🕐 {msk_time.strftime('%H:%M:%S')} МСК\n"
+    msg += "─" * 25 + "\n\n"
+    
+    has_changes = False
+    
+    for category, items in categories.items():
+        cat_emoji = cat_emojis.get(category, "📌")
+        msg += f"{cat_emoji} <b>{category}</b>\n"
+        
+        if items['added']:
+            for name, stock, rarity in items['added']:
+                rarity_emoji = rarity_emojis.get(rarity, "⚪")
+                msg += f"  🟢 {rarity_emoji} {name} — <b>{stock} шт.</b> ({rarity})\n"
+            has_changes = True
+        
+        if items['changed']:
+            for name, stock, rarity in items['changed']:
+                rarity_emoji = rarity_emojis.get(rarity, "⚪")
+                msg += f"  🟡 {rarity_emoji} {name} — <b>{stock} шт.</b> ({rarity})\n"
+            has_changes = True
+        
+        if items['removed']:
+            for name, rarity in items['removed']:
+                rarity_emoji = rarity_emojis.get(rarity, "⚪")
+                msg += f"  🔴 {rarity_emoji} {name} ({rarity})\n"
+            has_changes = True
+        
         msg += "\n"
-
-    if changed:
-        msg += "🟡 <b>Изменилось количество:</b>\n"
-        for name, ch in changed.items():
-            msg += f"• {name}: {ch['old']} → {ch['new']} шт.\n"
-        msg += "\n"
-
-    if removed:
-        msg += "🔴 <b>Пропали:</b>\n"
-        for name in removed:
-            msg += f"• {name}\n"
-        msg += "\n"
-
-    msg += "🤖 Наш бот: @growagardenstock235_bot"
+    
+    if not has_changes:
+        msg += "✅ Изменений нет\n"
+    
+    msg += "\n🤖 Наш бот: @growagardenstock235_bot"
+    
     return msg
 
 def format_full_stock_message(data):
@@ -420,7 +474,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_reply_markup(reply_markup=get_subscriptions_menu(user_id, page))
         return
 
-    # ==================== ИСПРАВЛЕНИЕ ОТКЛЮЧЕНИЯ УВЕДОМЛЕНИЙ ====================
     elif data.startswith("unsub_"):
         item_name = data.replace("unsub_", "")
         subscriptions = user_settings[user_id].get("subscriptions", [])
@@ -559,7 +612,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_reply_markup(reply_markup=get_admin_subscriptions_menu(chat_id, page))
             return
         
-        # ==================== ИСПРАВЛЕНИЕ ДЛЯ ГРУППОВЫХ ПОДПИСОК ====================
         elif data.startswith("admin_unsub_"):
             item_name = data.replace("admin_unsub_", "")
             subscriptions = group_settings.get(str(chat_id), {}).get("subscriptions", [])
