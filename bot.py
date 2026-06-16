@@ -11,13 +11,17 @@ import time
 # ================= НАСТРОЙКИ =================
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 API_URL = "https://grow-a-garden-2-tracker.onrender.com/api/stock"
+CHANNEL_ID = --1003618091927  # ID вашего канала (с -100)
 DATA_FILE = "user_settings.json"
 GROUP_SETTINGS_FILE = "group_settings.json"
 ITEMS_CACHE_FILE = "items_cache.json"
-CACHE_TTL = 300  # 5 минут
+CACHE_TTL = 300
 
 # ================= АДМИНЫ =================
-ADMIN_IDS = [7632708290, 5634818913]  # Только эти пользователи могут использовать админ-панель
+ADMIN_IDS = [7632708290, 5634818913]
+
+# ================= РЕДКИЕ РЕДКОСТИ =================
+RARE_RARITIES = ["Legendary", "Mythic", "Super"]
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -25,8 +29,6 @@ logging.basicConfig(
     handlers=[logging.FileHandler('bot.log', encoding='utf-8'), logging.StreamHandler()]
 )
 logger = logging.getLogger(__name__)
-
-# ================= ЗАГРУЗКА ДАННЫХ =================
 
 def load_json(filename, default=None):
     try:
@@ -64,11 +66,9 @@ def get_all_items_from_api(data):
 
 def load_items():
     global all_items, _items_cache_time
-    # Если кеш свежий — используем его
     if time.time() - _items_cache_time < CACHE_TTL and all_items:
         return all_items
     
-    # Пробуем загрузить из файла
     cached = load_json(ITEMS_CACHE_FILE)
     if cached.get('items') and time.time() - cached.get('timestamp', 0) < CACHE_TTL:
         all_items = cached['items']
@@ -76,7 +76,6 @@ def load_items():
         logger.info(f"Загружено из кеша: {len(all_items)} предметов")
         return all_items
     
-    # Если кеш протух — запрашиваем API
     try:
         resp = requests.get(API_URL, timeout=15)
         if resp.status_code == 200:
@@ -92,13 +91,6 @@ def load_items():
     
     return all_items
 
-async def update_all_items():
-    """Обновляет список предметов (асинхронная обёртка)"""
-    load_items()
-    return all_items
-
-# ================= ФУНКЦИИ СТОКА =================
-
 def get_stock_signature(data):
     signature = {}
     for shop_type in ["SeedShop_Normal", "CrateShop", "GearShop"]:
@@ -111,6 +103,52 @@ def get_changes(old, new):
     removed = {n: s for n, s in old.items() if n not in new}
     changed = {n: {'old': old[n], 'new': new[n]} for n in new if n in old and old[n] != new[n]}
     return added, removed, changed
+
+def format_rare_stock_for_channel(data):
+    """Форматирует редкие предметы для канала (только Legendary, Mythic, Super)"""
+    # Эмодзи для категорий
+    emojis = {
+        "SeedShop_Normal": "🌱",
+        "GearShop": "⚙️"
+    }
+    
+    # Эмодзи для редкостей
+    rarity_emojis = {
+        "Legendary": "⭐",
+        "Mythic": "🔮",
+        "Super": "🌟"
+    }
+    
+    msg = "🔥 <b>ОБНАРУЖЕН РЕДКИЙ СТОК!</b>\n"
+    msg += f"🕐 {datetime.now().strftime('%H:%M:%S')}\n\n"
+    
+    has_rare = False
+    
+    # Только семена и снаряжение (без ящиков)
+    for shop_type, shop_name in [("SeedShop_Normal", "🌱 Семена"), 
+                                   ("GearShop", "⚙️ Снаряжение")]:
+        rare_items = []
+        for item in data.get("shops", {}).get(shop_type, []):
+            rarity = item.get('rarity', 'Common')
+            stock = item.get('stock', 0)
+            name = item.get('name')
+            
+            if rarity in RARE_RARITIES and stock > 0:
+                rarity_emoji = rarity_emojis.get(rarity, "⭐")
+                rare_items.append(f"{rarity_emoji} <b>{name}</b> — {stock} шт. ({rarity})")
+                has_rare = True
+        
+        if rare_items:
+            msg += f"{shop_name}:\n"
+            msg += "\n".join(rare_items) + "\n\n"
+    
+    if not has_rare:
+        return None
+    
+    # Добавляем ссылку на бота
+    msg += "\n🤖 Наш бот: @growagardenstock235_bot"
+    
+    return msg
 
 def format_full_stock_message(data):
     msg = f"📦 <b>ТЕКУЩИЙ СТОК Grow a Garden 2</b>\n🕐 {datetime.now().strftime('%H:%M:%S')}\n\n"
@@ -267,16 +305,12 @@ def get_subscriptions_menu(user_id, page=0):
     keyboard.append([InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_menu")])
     return InlineKeyboardMarkup(keyboard)
 
-# ================= ПРОВЕРКА АДМИНА =================
-
 async def is_admin(update: Update, chat_id: int, user_id: int) -> bool:
     try:
         chat_member = await update.get_bot().get_chat_member(chat_id, user_id)
         return chat_member.status in ['creator', 'administrator']
     except:
         return False
-
-# ================= КОМАНДЫ =================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
@@ -296,21 +330,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Админ-панель (только для владельца бота)"""
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
     
-    # Проверяем, что команда вызвана в группе
     if chat_id > 0:
         await update.message.reply_text("❌ Эта команда работает только в группах и каналах!")
         return
     
-    # Проверяем, является ли пользователь владельцем бота (по ID)
     if user_id not in ADMIN_IDS:
         await update.message.reply_text("❌ У вас нет прав на использование админ-панели!")
         return
     
-    # Дополнительная проверка: является ли пользователь админом группы
     if not await is_admin(update, chat_id, user_id):
         await update.message.reply_text("❌ Вы должны быть администратором группы, чтобы использовать админ-панель!")
         return
@@ -345,7 +375,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     data = query.data
     
-    # === ГЛАВНОЕ МЕНЮ ===
     if data == "back_to_menu":
         items = load_items()
         await query.edit_message_text(
@@ -436,28 +465,22 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_reply_markup(reply_markup=get_items_menu(user_id, category, page))
         return
     
-    # === АДМИН-ПАНЕЛЬ ===
     elif data.startswith("admin_"):
-        # Проверяем, что пользователь — владелец бота
         if int(user_id) not in ADMIN_IDS:
             await query.edit_message_text("❌ У вас нет прав на использование админ-панели!")
             return
         
-        # Проверяем, что пользователь — админ группы
         if not await is_admin(update, chat_id, int(user_id)):
             await query.edit_message_text("❌ Вы должны быть администратором группы!")
             return
         
-        # Закрыть админ-панель
         if data == "admin_close":
             await query.edit_message_text("👑 Админ-панель закрыта", reply_markup=None)
             return
         
-        # Назад в админ-меню
         elif data == "admin_back":
             await query.edit_message_text(
-                "👑 <b>Админ-панель</b>\n\n"
-                "Выбери действие:",
+                "👑 <b>Админ-панель</b>\n\nВыбери действие:",
                 parse_mode=ParseMode.HTML,
                 reply_markup=get_admin_menu(chat_id))
             return
@@ -508,7 +531,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             action = parts[1]
             category = parts[2] if len(parts) > 2 else ""
             
-            # Если это выбор категории (admin_add_seed)
             if len(parts) == 3:
                 category_name = {"seed": "Семена", "crate": "Ящики", "gear": "Снаряжение"}.get(category, category)
                 await query.edit_message_text(
@@ -520,7 +542,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data['admin_category'] = category_name
                 return
             
-            # Если это выбор предмета (admin_add_Семена_0_Carrot)
             elif len(parts) >= 5:
                 category = parts[2]
                 page = int(parts[3])
@@ -577,7 +598,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.edit_message_text("📋 <b>В этой группе пока нет подписанных предметов</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_menu(chat_id))
             return
 
-# ================= ФОНОВАЯ ПРОВЕРКА СТОКА =================
+# ================= ФОНОВАЯ ПРОВЕРКА =================
 
 async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
     global last_stock_data
@@ -596,7 +617,20 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
             if added or removed or changed:
                 logger.info(f"Изменения: +{len(added)} -{len(removed)} ~{len(changed)}")
                 
-                # === 1. ОТПРАВКА В ЛС ===
+                # === 1. ОТПРАВКА В КАНАЛ (ТОЛЬКО РЕДКИЕ СЕМЕНА И СНАРЯЖЕНИЕ) ===
+                rare_msg = format_rare_stock_for_channel(data)
+                if rare_msg:
+                    try:
+                        await context.bot.send_message(
+                            chat_id=CHANNEL_ID,
+                            text=rare_msg,
+                            parse_mode=ParseMode.HTML
+                        )
+                        logger.info(f"✅ Редкий сток отправлен в канал {CHANNEL_ID}")
+                    except Exception as e:
+                        logger.error(f"❌ Не отправлено в канал {CHANNEL_ID}: {e}")
+                
+                # === 2. ОТПРАВКА В ЛС ===
                 for user_id, settings in user_settings.items():
                     subscriptions = settings.get("subscriptions", [])
                     if not subscriptions:
@@ -621,7 +655,7 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                         except Exception as e:
                             logger.error(f"❌ Не отправлено в ЛС {user_id}: {e}")
                 
-                # === 2. ОТПРАВКА В ГРУППУ (ВСЕ ИЗМЕНЕНИЯ) ===
+                # === 3. ОТПРАВКА В ГРУППУ ===
                 for chat_id_str, settings in group_settings.items():
                     subscriptions = settings.get("subscriptions", [])
                     if not subscriptions:
@@ -659,7 +693,7 @@ def main():
         logger.error("❌ Токен не найден!")
         return
     
-    load_items()  # Предзагрузка при старте
+    load_items()
     
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
