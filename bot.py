@@ -65,7 +65,7 @@ user_settings = load_json(DATA_FILE, {})
 group_settings = load_json(GROUP_SETTINGS_FILE, {})
 all_items = {}
 last_stock_data = None
-_last_rare_signature = None  # ← Храним подпись последнего редкого стока
+_last_rare_signature = None
 _items_cache_time = 0
 
 # ================= КЕШИРОВАНИЕ =================
@@ -107,24 +107,18 @@ def load_items():
     return all_items
 
 def get_stock_signature(data):
-    """Создаёт подпись ТОЛЬКО для редких предметов (без updatedAt)"""
     signature = {}
-    
-    # Только те категории, которые отправляются в канал
     for shop_type in ["SeedShop_Normal", "GearShop"]:
         for item in data.get("shops", {}).get(shop_type, []):
             name = item.get('name')
             rarity = item.get('rarity', 'Common')
             stock = item.get('stock', 0)
-            
-            # Проверяем, является ли предмет редким или в списке FORCED_ITEMS
             if (rarity in RARE_RARITIES or name in FORCED_ITEMS) and stock > 0:
                 signature[f"{shop_type}_{name}"] = {
                     'name': name,
                     'rarity': rarity,
                     'stock': stock
                 }
-    
     return signature
 
 def get_all_changes(old, new):
@@ -136,30 +130,14 @@ def get_all_changes(old, new):
 # ================= ФОРМАТИРОВАНИЕ =================
 
 def format_rare_stock_for_channel(data):
-    """Форматирует сообщение для канала/темы"""
     msk_time = get_msk_time()
-    
-    category_emojis = {
-        "SeedShop_Normal": "🌱",
-        "GearShop": "⚙️"
-    }
-    
-    rarity_emojis = {
-        "Epic": "🟣",
-        "Legendary": "⭐",
-        "Mythic": "🔮",
-        "Super": "🌟"
-    }
-    
-    category_names = {
-        "SeedShop_Normal": "СЕМЕНА",
-        "GearShop": "СНАРЯЖЕНИЕ"
-    }
+    category_emojis = {"SeedShop_Normal": "🌱", "GearShop": "⚙️"}
+    rarity_emojis = {"Epic": "🟣", "Legendary": "⭐", "Mythic": "🔮", "Super": "🌟"}
+    category_names = {"SeedShop_Normal": "СЕМЕНА", "GearShop": "СНАРЯЖЕНИЕ"}
 
     msg = "🔥 <b>ОБНАРУЖЕН РЕДКИЙ СТОК!</b>\n"
     msg += f"🕐 {msk_time.strftime('%H:%M:%S')} МСК\n"
     msg += "═" * 30 + "\n\n"
-    
     has_rare = False
 
     for shop_type, shop_name in [("SeedShop_Normal", "Семена"), ("GearShop", "Снаряжение")]:
@@ -179,21 +157,13 @@ def format_rare_stock_for_channel(data):
 
     if not has_rare:
         return None
-    
     msg += "═" * 30 + "\n"
     msg += "🤖 Наш бот: @growagardenstock235_bot"
     return msg
 
 def format_group_stock_message(added, changed, removed):
-    """Сообщение для группы"""
     msk_time = get_msk_time()
-    
-    cat_emojis = {
-        "Семена": "🌾",
-        "Ящики": "📦",
-        "Снаряжение": "⚙️"
-    }
-    
+    cat_emojis = {"Семена": "🌾", "Ящики": "📦", "Снаряжение": "⚙️"}
     categories = {}
 
     for name, stock in added.items():
@@ -223,33 +193,24 @@ def format_group_stock_message(added, changed, removed):
     msg += "─" * 25 + "\n\n"
     
     has_changes = False
-    
     for category, items in categories.items():
         cat_emoji = cat_emojis.get(category, "📌")
         msg += f"{cat_emoji} <b>{category}</b>\n"
         
-        if items['added']:
-            for name, stock, rarity in items['added']:
-                msg += f"  • {name} — <b>{stock} шт.</b> ({rarity})\n"
+        for name, stock, rarity in items.get('added', []):
+            msg += f"  • {name} — <b>{stock} шт.</b> ({rarity})\n"
             has_changes = True
-        
-        if items['changed']:
-            for name, stock, rarity in items['changed']:
-                msg += f"  • {name} — <b>{stock} шт.</b> ({rarity})\n"
+        for name, stock, rarity in items.get('changed', []):
+            msg += f"  • {name} — <b>{stock} шт.</b> ({rarity})\n"
             has_changes = True
-        
-        if items['removed']:
-            for name, rarity in items['removed']:
-                msg += f"  • {name} ({rarity})\n"
+        for name, rarity in items.get('removed', []):
+            msg += f"  • {name} ({rarity})\n"
             has_changes = True
-        
         msg += "\n"
     
     if not has_changes:
         msg += "✅ Изменений нет\n"
-    
     msg += "\n🤖 Наш бот: @growagardenstock235_bot"
-    
     return msg
 
 def format_full_stock_message(data):
@@ -268,6 +229,7 @@ def format_full_stock_message(data):
     return msg
 
 # ================= МЕНЮ =================
+# (все функции меню оставлены без изменений)
 
 def get_main_menu():
     keyboard = [
@@ -469,12 +431,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "back_to_menu":
         items = load_items()
-        await query.edit_message_text(
-            "🌱 <b>Grow a Garden 2 Tracker</b>\n\n"
-            f"📦 <b>Всего предметов:</b> {len(items)}",
-            parse_mode=ParseMode.HTML,
-            reply_markup=get_main_menu()
-        )
+        await query.edit_message_text("🌱 <b>Grow a Garden 2 Tracker</b>\n\n" f"📦 <b>Всего предметов:</b> {len(items)}", parse_mode=ParseMode.HTML, reply_markup=get_main_menu())
         return
 
     elif data == "show_full_stock":
@@ -506,22 +463,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         subscriptions = user_settings[user_id].get("subscriptions", [])
         subscriptions = [s for s in subscriptions if s != item_name]
         user_settings[user_id]["subscriptions"] = subscriptions
-        
-        if save_json(DATA_FILE, user_settings):
-            logger.info(f"Сохранены настройки пользователя {user_id}")
+        save_json(DATA_FILE, user_settings)
         
         if subscriptions:
-            await query.edit_message_text(
-                "📋 <b>Твои подписки</b>",
-                parse_mode=ParseMode.HTML,
-                reply_markup=get_subscriptions_menu(user_id)
-            )
+            await query.edit_message_text("📋 <b>Твои подписки</b>", parse_mode=ParseMode.HTML, reply_markup=get_subscriptions_menu(user_id))
         else:
-            await query.edit_message_text(
-                "📋 <b>Нет подписок</b>",
-                parse_mode=ParseMode.HTML,
-                reply_markup=get_main_menu()
-            )
+            await query.edit_message_text("📋 <b>Нет подписок</b>", parse_mode=ParseMode.HTML, reply_markup=get_main_menu())
         return
 
     elif data.startswith("category_"):
@@ -544,7 +491,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         user_settings[user_id]["subscriptions"] = subscriptions
         save_json(DATA_FILE, user_settings)
-        
         await query.edit_message_reply_markup(reply_markup=get_items_menu(user_id, category, page))
         return
 
@@ -592,8 +538,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         elif data == "admin_clear_all":
             group_settings[str(chat_id)] = {"subscriptions": []}
-            if save_json(GROUP_SETTINGS_FILE, group_settings):
-                logger.info(f"✅ Очищены подписки группы {chat_id}")
+            save_json(GROUP_SETTINGS_FILE, group_settings)
             await query.edit_message_text("👑 <b>Админ-панель</b>\n\nВсе подписки очищены!", parse_mode=ParseMode.HTML, reply_markup=get_admin_menu(chat_id))
             return
         
@@ -618,16 +563,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if action == "add":
                     if item_name not in subscriptions:
                         subscriptions.append(item_name)
-                        logger.info(f"✅ Добавлен {item_name} в группу {chat_id}")
                 else:
                     if item_name in subscriptions:
                         subscriptions.remove(item_name)
-                        logger.info(f"❌ Удалён {item_name} из группы {chat_id}")
                 
                 group_settings[str(chat_id)] = {"subscriptions": subscriptions}
-                if save_json(GROUP_SETTINGS_FILE, group_settings):
-                    logger.info(f"✅ Сохранены настройки группы {chat_id}")
-                
+                save_json(GROUP_SETTINGS_FILE, group_settings)
                 await query.edit_message_reply_markup(reply_markup=get_admin_items_menu(chat_id, category, action, page))
                 return
         
@@ -649,22 +590,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             subscriptions = group_settings.get(str(chat_id), {}).get("subscriptions", [])
             subscriptions = [s for s in subscriptions if s != item_name]
             group_settings[str(chat_id)] = {"subscriptions": subscriptions}
-            
-            if save_json(GROUP_SETTINGS_FILE, group_settings):
-                logger.info(f"✅ Удалён {item_name} из группы {chat_id}")
+            save_json(GROUP_SETTINGS_FILE, group_settings)
             
             if subscriptions:
-                await query.edit_message_text(
-                    "📋 <b>Подписки группы</b>",
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=get_admin_subscriptions_menu(chat_id)
-                )
+                await query.edit_message_text("📋 <b>Подписки группы</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_subscriptions_menu(chat_id))
             else:
-                await query.edit_message_text(
-                    "📋 <b>Нет подписок</b>",
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=get_admin_menu(chat_id)
-                )
+                await query.edit_message_text("📋 <b>Нет подписок</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_menu(chat_id))
             return
 
 # ================= ФОНОВАЯ ПРОВЕРКА =================
@@ -678,11 +609,9 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
         data = resp.json()
         new_stock_sig = get_stock_signature(data)
 
-        # === КАНАЛ/ТЕМА (только редкие) ===
-        # Создаём подпись текущего редкого стока
+        # === Отправка в ТЕМУ "Стоки" ===
         current_rare_sig = json.dumps(new_stock_sig, sort_keys=True)
         
-        # Если редкий сток изменился
         if current_rare_sig != _last_rare_signature:
             rare_msg = format_rare_stock_for_channel(data)
             if rare_msg:
@@ -697,8 +626,6 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                     logger.info(f"✅ Редкий сток отправлен в тему {MESSAGE_THREAD_ID}")
                 except Exception as e:
                     logger.error(f"❌ Ошибка отправки в тему: {e}")
-        else:
-            logger.info("⏸ Редкий сток не изменился (отправка пропущена)")
 
         if last_stock_data is None:
             last_stock_data = new_stock_sig
@@ -709,7 +636,7 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
         if added or removed or changed:
             logger.info(f"Изменения: +{len(added)} -{len(removed)} ~{len(changed)}")
 
-            # === ГРУППЫ ===
+            # === ГРУППЫ + ТЕМА ===
             for chat_id_str, settings in group_settings.items():
                 subscriptions = settings.get("subscriptions", [])
                 if not subscriptions:
@@ -721,11 +648,24 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
 
                 if group_added or group_changed or group_removed:
                     msg = format_group_stock_message(group_added, group_changed, group_removed)
+                    
+                    # Отправка в обычную группу
                     try:
                         await context.bot.send_message(int(chat_id_str), msg, parse_mode=ParseMode.HTML)
-                        logger.info(f"✅ Отправлено в группу {chat_id_str}")
                     except Exception as e:
-                        logger.error(f"❌ Ошибка отправки в группу: {e}")
+                        logger.error(f"❌ Ошибка отправки в группу {chat_id_str}: {e}")
+                    
+                    # Отправка в ТЕМУ "Стоки"
+                    try:
+                        await context.bot.send_message(
+                            chat_id=CHANNEL_ID,
+                            message_thread_id=MESSAGE_THREAD_ID,
+                            text=msg,
+                            parse_mode=ParseMode.HTML
+                        )
+                        logger.info(f"✅ Сток отправлен в тему {MESSAGE_THREAD_ID}")
+                    except Exception as e:
+                        logger.error(f"❌ Ошибка отправки в тему: {e}")
 
             # === ЛС ===
             for uid, settings in user_settings.items():
