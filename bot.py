@@ -33,7 +33,7 @@ FORCED_ITEMS = [
 # ================= ВСЕ ТИПЫ ПОГОДЫ =================
 WEATHER_TYPES = {
     "Rain": {"emoji": "🌧️", "name": "Дождь"},
-    "Snow": {"emoji": "❄️", "name": "Снег"},
+    "Snowfall": {"emoji": "❄️", "name": "Снег"},
     "Storm": {"emoji": "⛈️", "name": "Гроза"},
     "BloodMoon": {"emoji": "🌕", "name": "Кровавая Луна"},
     "Starfall": {"emoji": "⭐", "name": "Звездопад"},
