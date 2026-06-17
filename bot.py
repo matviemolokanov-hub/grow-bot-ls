@@ -30,6 +30,19 @@ FORCED_ITEMS = [
     "Super Sprinkler"
 ]
 
+# ================= ТИПЫ ПОГОДЫ =================
+WEATHER_TYPES = {
+    "Rain": {"emoji": "🌧️", "name": "Дождь"},
+    "Snow": {"emoji": "❄️", "name": "Снег"},
+    "Storm": {"emoji": "⛈️", "name": "Гроза"},
+    "BloodMoon": {"emoji": "🌕", "name": "Кровавая Луна"},
+    "Starfall": {"emoji": "⭐", "name": "Звездопад"},
+    "Midas": {"emoji": "✨", "name": "Золотая ночь"},
+    "RainbowMoon": {"emoji": "🌈", "name": "Радужная Луна"},
+    "Fog": {"emoji": "🌫️", "name": "Туман"},
+    "Wind": {"emoji": "💨", "name": "Ветер"},
+}
+
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
@@ -62,6 +75,8 @@ user_settings = load_json(DATA_FILE, {})
 group_settings = load_json(GROUP_SETTINGS_FILE, {})
 all_items = {}
 last_stock_data = None
+last_weather_data = None
+_last_rare_signature = None
 _items_cache_time = 0
 
 # ================= КЕШИРОВАНИЕ =================
@@ -103,13 +118,25 @@ def load_items():
     return all_items
 
 def get_stock_signature(data):
-    """Подпись для сравнения стока"""
     signature = {}
     for shop_type in ["SeedShop_Normal", "CrateShop", "GearShop"]:
         for item in data.get("shops", {}).get(shop_type, []):
+            signature[item.get('name')] = item.get('stock', 0)
+    return signature
+
+def get_rare_stock_signature(data):
+    signature = {}
+    for shop_type in ["SeedShop_Normal", "GearShop"]:
+        for item in data.get("shops", {}).get(shop_type, []):
             name = item.get('name')
+            rarity = item.get('rarity', 'Common')
             stock = item.get('stock', 0)
-            signature[name] = stock
+            if (rarity in RARE_RARITIES or name in FORCED_ITEMS) and stock > 0:
+                signature[f"{shop_type}_{name}"] = {
+                    'name': name,
+                    'rarity': rarity,
+                    'stock': stock
+                }
     return signature
 
 def get_changes(old, new):
@@ -118,10 +145,31 @@ def get_changes(old, new):
     changed = {n: {'old': old[n], 'new': new[n]} for n in new if n in old and old[n] != new[n]}
     return added, removed, changed
 
-# ================= ФОРМАТИРОВАНИЕ =================
+def get_weather_type(data):
+    """Определяет текущую погоду из данных API"""
+    weather = data.get('weather', {})
+    weathers = weather.get('weathers', {})
+    
+    for key in WEATHER_TYPES.keys():
+        if weathers.get(key) is True or weathers.get(key) == "true":
+            return key
+    
+    return None
+
+def format_weather_message(weather_key):
+    """Форматирует сообщение о погоде"""
+    msk_time = get_msk_time()
+    weather_info = WEATHER_TYPES.get(weather_key, {"emoji": "☀️", "name": "Обычная"})
+    
+    msg = f"🌤️ <b>ПОГОДА ИЗМЕНИЛАСЬ!</b>\n"
+    msg += f"{weather_info['emoji']} <b>{weather_info['name']}</b>\n"
+    msg += f"🕐 {msk_time.strftime('%H:%M:%S')} МСК\n"
+    msg += "\n🤖 Наш бот: @growagardenstock235_bot"
+    return msg
+
+# ================= ФОРМАТИРОВАНИЕ СТОКА =================
 
 def format_rare_stock_for_channel(data):
-    """Форматирует сообщение для КАНАЛА"""
     msk_time = get_msk_time()
     category_emojis = {"SeedShop_Normal": "🌱", "GearShop": "⚙️"}
     rarity_emojis = {"Epic": "🟣", "Legendary": "⭐", "Mythic": "🔮", "Super": "🌟"}
@@ -154,7 +202,6 @@ def format_rare_stock_for_channel(data):
     return msg
 
 def format_group_stock_message(added, changed, removed):
-    """Форматирует сообщение для ГРУППЫ"""
     msk_time = get_msk_time()
     cat_emojis = {"Семена": "🌾", "Ящики": "📦", "Снаряжение": "⚙️"}
     categories = {}
@@ -625,7 +672,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ================= ФОНОВАЯ ПРОВЕРКА =================
 async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
-    global last_stock_data
+    global last_stock_data, last_weather_data, _last_rare_signature
     try:
         resp = requests.get(API_URL, timeout=15)
         if resp.status_code != 200:
@@ -633,19 +680,70 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
 
         data = resp.json()
         new_stock_sig = get_stock_signature(data)
+        new_rare_sig = get_rare_stock_signature(data)
+        new_weather = get_weather_type(data)
 
-        # === КАНАЛ (отправляем всегда, если есть редкие) ===
-        rare_msg = format_rare_stock_for_channel(data)
-        if rare_msg:
-            try:
-                await context.bot.send_message(
-                    chat_id=CHANNEL_ID,
-                    text=rare_msg,
-                    parse_mode=ParseMode.HTML
-                )
-                logger.info(f"✅ Редкий сток отправлен в канал {CHANNEL_ID}")
-            except Exception as e:
-                logger.error(f"❌ Ошибка отправки в канал: {e}")
+        # === ПОГОДА ===
+        if last_weather_data is not None and new_weather != last_weather_data:
+            if new_weather:
+                weather_msg = format_weather_message(new_weather)
+                
+                # В канал
+                try:
+                    await context.bot.send_message(
+                        chat_id=CHANNEL_ID,
+                        text=weather_msg,
+                        parse_mode=ParseMode.HTML
+                    )
+                    logger.info(f"✅ Погода отправлена в канал: {new_weather}")
+                except Exception as e:
+                    logger.error(f"❌ Ошибка отправки погоды в канал: {e}")
+                
+                # В группы (если есть подписки на погоду)
+                for chat_id_str, settings in group_settings.items():
+                    if settings.get("weather", False):
+                        try:
+                            await context.bot.send_message(
+                                int(chat_id_str),
+                                weather_msg,
+                                parse_mode=ParseMode.HTML
+                            )
+                            logger.info(f"✅ Погода отправлена в группу {chat_id_str}")
+                        except Exception as e:
+                            logger.error(f"❌ Не отправлено в группу {chat_id_str}: {e}")
+                
+                # В ЛС (если есть подписки на погоду)
+                for uid, settings in user_settings.items():
+                    if settings.get("weather", False):
+                        try:
+                            await context.bot.send_message(
+                                int(uid),
+                                weather_msg,
+                                parse_mode=ParseMode.HTML
+                            )
+                            logger.info(f"✅ Погода отправлена в ЛС {uid}")
+                        except Exception as e:
+                            logger.error(f"❌ Не отправлено в ЛС {uid}: {e}")
+        
+        last_weather_data = new_weather
+
+        # === КАНАЛ (редкий сток) ===
+        current_rare_sig = json.dumps(new_rare_sig, sort_keys=True)
+        if current_rare_sig != _last_rare_signature:
+            rare_msg = format_rare_stock_for_channel(data)
+            if rare_msg:
+                try:
+                    await context.bot.send_message(
+                        chat_id=CHANNEL_ID,
+                        text=rare_msg,
+                        parse_mode=ParseMode.HTML
+                    )
+                    _last_rare_signature = current_rare_sig
+                    logger.info(f"✅ Редкий сток отправлен в канал {CHANNEL_ID}")
+                except Exception as e:
+                    logger.error(f"❌ Ошибка отправки в канал: {e}")
+        else:
+            logger.info("⏸ Редкий сток не изменился")
 
         if last_stock_data is None:
             last_stock_data = new_stock_sig
@@ -715,9 +813,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CallbackQueryHandler(button_handler))
-    
-    # Проверка каждые 30 секунд (чтобы не пропустить обновление)
-    app.job_queue.run_repeating(check_and_notify, interval=30, first=10)
+    app.job_queue.run_repeating(check_and_notify, interval=60, first=10)
 
     logger.info("Бот запущен!")
     app.run_polling()
