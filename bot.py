@@ -54,7 +54,7 @@ logger = logging.getLogger(__name__)
 def get_msk_time():
     return datetime.now(timezone(timedelta(hours=3)))
 
-# ================= СОХРАНЕНИЕ НАСТРОЕК =================
+# ================= СОХРАНЕНИЕ =================
 def load_json(filename, default=None):
     try:
         with open(filename, "r", encoding="utf-8") as f:
@@ -146,21 +146,16 @@ def get_changes(old, new):
     return added, removed, changed
 
 def get_weather_type(data):
-    """Определяет текущую погоду из данных API"""
     weather = data.get('weather', {})
     weathers = weather.get('weathers', {})
-    
     for key in WEATHER_TYPES.keys():
         if weathers.get(key) is True or weathers.get(key) == "true":
             return key
-    
     return None
 
 def format_weather_message(weather_key):
-    """Форматирует сообщение о погоде"""
     msk_time = get_msk_time()
     weather_info = WEATHER_TYPES.get(weather_key, {"emoji": "☀️", "name": "Обычная"})
-    
     msg = f"🌤️ <b>ПОГОДА ИЗМЕНИЛАСЬ!</b>\n"
     msg += f"{weather_info['emoji']} <b>{weather_info['name']}</b>\n"
     msg += f"🕐 {msk_time.strftime('%H:%M:%S')} МСК\n"
@@ -283,12 +278,14 @@ def get_main_menu():
     return InlineKeyboardMarkup(keyboard)
 
 def get_admin_menu(chat_id):
-    settings = group_settings.get(str(chat_id), {"subscriptions": []})
+    settings = group_settings.get(str(chat_id), {"subscriptions": [], "weather": False})
     subs_count = len(settings.get("subscriptions", []))
+    weather_status = "✅" if settings.get("weather", False) else "❌"
     keyboard = [
         [InlineKeyboardButton(f"📋 Настройки группы ({subs_count})", callback_data="admin_view_subs")],
         [InlineKeyboardButton("➕ Добавить предметы", callback_data="admin_add_items")],
         [InlineKeyboardButton("➖ Удалить предметы", callback_data="admin_remove_items")],
+        [InlineKeyboardButton(f"{weather_status} Погода", callback_data="admin_toggle_weather")],
         [InlineKeyboardButton("🗑️ Очистить все", callback_data="admin_clear_all")],
         [InlineKeyboardButton("🔙 Закрыть", callback_data="admin_close")],
     ]
@@ -441,12 +438,13 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if str(chat_id) not in group_settings:
-        group_settings[str(chat_id)] = {"subscriptions": []}
+        group_settings[str(chat_id)] = {"subscriptions": [], "weather": False}
         save_json(GROUP_SETTINGS_FILE, group_settings)
 
     await update.message.reply_text(
         "👑 <b>Админ-панель</b>\n\n"
         "Здесь ты можешь настроить, какие предметы будут автоматически отправляться в этот чат при появлении в стоке.\n\n"
+        "🌤️ Погода — включает уведомления о смене погоды\n\n"
         "✅ — предмет уже в списке\n"
         "❌ — не в списке",
         parse_mode=ParseMode.HTML,
@@ -583,6 +581,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.edit_message_text("📋 <b>Подписки группы</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_subscriptions_menu(chat_id))
             return
         
+        # ==================== ПОГОДА ====================
+        elif data == "admin_toggle_weather":
+            settings = group_settings.get(str(chat_id), {"subscriptions": [], "weather": False})
+            settings["weather"] = not settings.get("weather", False)
+            group_settings[str(chat_id)] = settings
+            if save_json(GROUP_SETTINGS_FILE, group_settings):
+                logger.info(f"✅ Погода для группы {chat_id}: {'включена' if settings['weather'] else 'выключена'}")
+            await query.edit_message_reply_markup(reply_markup=get_admin_menu(chat_id))
+            await query.answer(f"🌤️ Погода {'включена' if settings['weather'] else 'выключена'}")
+            return
+        
         elif data == "admin_add_items":
             context.user_data['admin_action'] = 'add'
             await query.edit_message_text("📂 <b>Выбери категорию:</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_category_menu('add'))
@@ -594,7 +603,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         elif data == "admin_clear_all":
-            group_settings[str(chat_id)] = {"subscriptions": []}
+            group_settings[str(chat_id)] = {"subscriptions": [], "weather": False}
             if save_json(GROUP_SETTINGS_FILE, group_settings):
                 logger.info(f"✅ Очищены подписки группы {chat_id}")
             await query.edit_message_text("👑 <b>Админ-панель</b>\n\nВсе подписки очищены!", parse_mode=ParseMode.HTML, reply_markup=get_admin_menu(chat_id))
@@ -627,7 +636,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         subscriptions.remove(item_name)
                         logger.info(f"❌ Удалён {item_name} из группы {chat_id}")
                 
-                group_settings[str(chat_id)] = {"subscriptions": subscriptions}
+                group_settings[str(chat_id)] = {"subscriptions": subscriptions, "weather": settings.get("weather", False)}
                 if save_json(GROUP_SETTINGS_FILE, group_settings):
                     logger.info(f"✅ Сохранены настройки группы {chat_id}")
                 
@@ -651,7 +660,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             item_name = data.replace("admin_unsub_", "")
             subscriptions = group_settings.get(str(chat_id), {}).get("subscriptions", [])
             subscriptions = [s for s in subscriptions if s != item_name]
-            group_settings[str(chat_id)] = {"subscriptions": subscriptions}
+            group_settings[str(chat_id)] = {"subscriptions": subscriptions, "weather": group_settings.get(str(chat_id), {}).get("weather", False)}
             
             if save_json(GROUP_SETTINGS_FILE, group_settings):
                 logger.info(f"✅ Удалён {item_name} из группы {chat_id}")
@@ -699,7 +708,7 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     logger.error(f"❌ Ошибка отправки погоды в канал: {e}")
                 
-                # В группы (если есть подписки на погоду)
+                # В группы (если включена погода)
                 for chat_id_str, settings in group_settings.items():
                     if settings.get("weather", False):
                         try:
@@ -711,19 +720,6 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                             logger.info(f"✅ Погода отправлена в группу {chat_id_str}")
                         except Exception as e:
                             logger.error(f"❌ Не отправлено в группу {chat_id_str}: {e}")
-                
-                # В ЛС (если есть подписки на погоду)
-                for uid, settings in user_settings.items():
-                    if settings.get("weather", False):
-                        try:
-                            await context.bot.send_message(
-                                int(uid),
-                                weather_msg,
-                                parse_mode=ParseMode.HTML
-                            )
-                            logger.info(f"✅ Погода отправлена в ЛС {uid}")
-                        except Exception as e:
-                            logger.error(f"❌ Не отправлено в ЛС {uid}: {e}")
         
         last_weather_data = new_weather
 
