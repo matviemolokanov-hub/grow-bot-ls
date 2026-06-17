@@ -30,7 +30,7 @@ FORCED_ITEMS = [
     "Super Sprinkler"
 ]
 
-# ================= ТИПЫ ПОГОДЫ =================
+# ================= ВСЕ ТИПЫ ПОГОДЫ =================
 WEATHER_TYPES = {
     "Rain": {"emoji": "🌧️", "name": "Дождь"},
     "Snow": {"emoji": "❄️", "name": "Снег"},
@@ -38,6 +38,7 @@ WEATHER_TYPES = {
     "BloodMoon": {"emoji": "🌕", "name": "Кровавая Луна"},
     "Starfall": {"emoji": "⭐", "name": "Звездопад"},
     "Midas": {"emoji": "✨", "name": "Золотая ночь"},
+    "Goldmoon": {"emoji": "🌙", "name": "Золотая Луна"},
     "RainbowMoon": {"emoji": "🌈", "name": "Радужная Луна"},
     "Fog": {"emoji": "🌫️", "name": "Туман"},
     "Wind": {"emoji": "💨", "name": "Ветер"},
@@ -145,13 +146,32 @@ def get_changes(old, new):
     changed = {n: {'old': old[n], 'new': new[n]} for n in new if n in old and old[n] != new[n]}
     return added, removed, changed
 
+# ================= ОПРЕДЕЛЕНИЕ ПОГОДЫ =================
 def get_weather_type(data):
+    """Определяет текущую погоду из API (weathers + phase)"""
     weather = data.get('weather', {})
     weathers = weather.get('weathers', {})
+    
+    # 1. Проверяем weathers (дождь, снег, гроза)
     for key in WEATHER_TYPES.keys():
         if weathers.get(key) is True or weathers.get(key) == "true":
             return key
+    
+    # 2. Проверяем phase (лунные фазы)
+    phase = weather.get('phase', '')
+    phase_map = {
+        "Goldmoon": "Goldmoon",
+        "BloodMoon": "BloodMoon",
+        "Midas": "Midas",
+        "Starfall": "Starfall",
+        "RainbowMoon": "RainbowMoon",
+    }
+    if phase in phase_map:
+        return phase_map[phase]
+    
     return None
+
+# ================= ФОРМАТИРОВАНИЕ =================
 
 def format_weather_message(weather_key):
     msk_time = get_msk_time()
@@ -161,8 +181,6 @@ def format_weather_message(weather_key):
     msg += f"🕐 {msk_time.strftime('%H:%M:%S')} МСК\n"
     msg += "\n🤖 Наш бот: @growagardenstock235_bot"
     return msg
-
-# ================= ФОРМАТИРОВАНИЕ СТОКА =================
 
 def format_rare_stock_for_channel(data):
     msk_time = get_msk_time()
@@ -581,7 +599,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.edit_message_text("📋 <b>Подписки группы</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_subscriptions_menu(chat_id))
             return
         
-        # ==================== ПОГОДА ====================
         elif data == "admin_toggle_weather":
             settings = group_settings.get(str(chat_id), {"subscriptions": [], "weather": False})
             settings["weather"] = not settings.get("weather", False)
@@ -636,7 +653,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         subscriptions.remove(item_name)
                         logger.info(f"❌ Удалён {item_name} из группы {chat_id}")
                 
-                group_settings[str(chat_id)] = {"subscriptions": subscriptions, "weather": settings.get("weather", False)}
+                group_settings[str(chat_id)] = {"subscriptions": subscriptions, "weather": group_settings.get(str(chat_id), {}).get("weather", False)}
                 if save_json(GROUP_SETTINGS_FILE, group_settings):
                     logger.info(f"✅ Сохранены настройки группы {chat_id}")
                 
@@ -721,9 +738,7 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                         except Exception as e:
                             logger.error(f"❌ Не отправлено в группу {chat_id_str}: {e}")
         
-        last_weather_data = new_weather
-
-        # === КАНАЛ (редкий сток) ===
+        last_weather_data = new_weather        # === КАНАЛ (редкий сток) ===
         current_rare_sig = json.dumps(new_rare_sig, sort_keys=True)
         if current_rare_sig != _last_rare_signature:
             rare_msg = format_rare_stock_for_channel(data)
