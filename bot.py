@@ -830,7 +830,12 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CallbackQueryHandler(button_handler))
-    app.job_queue.run_repeating(check_and_notify, interval=60, first=10)
+    
+    # Проверка каждые 10 секунд (было 60)
+    app.job_queue.run_repeating(check_and_notify, interval=10, first=5)
+    
+    # Принудительная проверка через 2 секунды после запуска
+    app.job_queue.run_once(check_and_notify, when=2)
 
     logger.info("Бот запущен!")
     app.run_polling()
