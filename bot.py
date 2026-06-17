@@ -1,6 +1,4 @@
-
-
-    import requests
+import requests
 import json
 import logging
 from datetime import datetime, timezone, timedelta
