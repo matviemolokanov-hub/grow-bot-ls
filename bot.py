@@ -160,10 +160,10 @@ def get_weather_type(data):
     phase = weather.get('phase', '')
     phase_map = {
         "Goldmoon": "Goldmoon",
-        "BloodMoon": "BloodMoon",
+        "Blood Moon": "Blood Moon",
         "Midas": "Midas",
         "Starfall": "Starfall",
-        "RainbowMoon": "RainbowMoon",
+        "Rainbow Moon": "Rainbow Moon",
     }
     if phase in phase_map:
         return phase_map[phase]
@@ -745,36 +745,48 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
         new_rare_sig = get_rare_stock_signature(data)
         new_weather = get_weather_type(data)
 
-        # === ДИАГНОСТИКА ПОГОДЫ ===
+        # === ДИАГНОСТИКА ===
         logger.info(f"🌤️ Текущая погода: {new_weather}")
         logger.info(f"📊 Предыдущая погода: {last_weather_data}")
-        logger.info(f"📋 Данные погоды: {data.get('weather', {})}")
 
-        # === ПОГОДА ===
+        # === ПРИНУДИТЕЛЬНАЯ ОТПРАВКА ПРИ ПЕРВОМ ЗАПУСКЕ (ТОЛЬКО ЕСЛИ ЕСТЬ ПОГОДА) ===
+        if last_weather_data is None and new_weather:
+            logger.info(f"🔥 Первый запуск, отправляем текущую погоду: {new_weather}")
+            weather_msg = format_weather_message(new_weather)
+            
+            # В канал
+            try:
+                await context.bot.send_message(CHANNEL_ID, weather_msg, parse_mode=ParseMode.HTML)
+                logger.info(f"✅ Погода отправлена в канал (первый запуск): {new_weather}")
+            except Exception as e:
+                logger.error(f"❌ Ошибка отправки в канал: {e}")
+            
+            # В группы с включенной погодой
+            for chat_id_str, settings in group_settings.items():
+                if settings.get("weather", False):
+                    try:
+                        await context.bot.send_message(int(chat_id_str), weather_msg, parse_mode=ParseMode.HTML)
+                        logger.info(f"✅ Погода отправлена в группу (первый запуск): {chat_id_str}")
+                    except Exception as e:
+                        logger.error(f"❌ Не отправлено в группу: {e}")
+
+        # === ПОГОДА (при смене) ===
         if last_weather_data is not None and new_weather != last_weather_data:
             if new_weather:
                 weather_msg = format_weather_message(new_weather)
                 
                 # В канал
                 try:
-                    await context.bot.send_message(
-                        chat_id=CHANNEL_ID,
-                        text=weather_msg,
-                        parse_mode=ParseMode.HTML
-                    )
+                    await context.bot.send_message(CHANNEL_ID, weather_msg, parse_mode=ParseMode.HTML)
                     logger.info(f"✅ Погода отправлена в канал: {new_weather}")
                 except Exception as e:
                     logger.error(f"❌ Ошибка отправки погоды в канал: {e}")
                 
-                # В группы (если включена погода)
+                # В группы
                 for chat_id_str, settings in group_settings.items():
                     if settings.get("weather", False):
                         try:
-                            await context.bot.send_message(
-                                int(chat_id_str),
-                                weather_msg,
-                                parse_mode=ParseMode.HTML
-                            )
+                            await context.bot.send_message(int(chat_id_str), weather_msg, parse_mode=ParseMode.HTML)
                             logger.info(f"✅ Погода отправлена в группу {chat_id_str}")
                         except Exception as e:
                             logger.error(f"❌ Не отправлено в группу {chat_id_str}: {e}")
@@ -787,11 +799,7 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
             rare_msg = format_rare_stock_for_channel(data)
             if rare_msg:
                 try:
-                    await context.bot.send_message(
-                        chat_id=CHANNEL_ID,
-                        text=rare_msg,
-                        parse_mode=ParseMode.HTML
-                    )
+                    await context.bot.send_message(CHANNEL_ID, rare_msg, parse_mode=ParseMode.HTML)
                     _last_rare_signature = current_rare_sig
                     logger.info(f"✅ Редкий сток отправлен в канал {CHANNEL_ID}")
                 except Exception as e:
