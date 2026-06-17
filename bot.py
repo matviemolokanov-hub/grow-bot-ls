@@ -148,16 +148,13 @@ def get_changes(old, new):
 
 # ================= ОПРЕДЕЛЕНИЕ ПОГОДЫ =================
 def get_weather_type(data):
-    """Определяет текущую погоду из API (weathers + phase)"""
     weather = data.get('weather', {})
     weathers = weather.get('weathers', {})
     
-    # 1. Проверяем weathers (дождь, снег, гроза)
     for key in WEATHER_TYPES.keys():
         if weathers.get(key) is True or weathers.get(key) == "true":
             return key
     
-    # 2. Проверяем phase (лунные фазы)
     phase = weather.get('phase', '')
     phase_map = {
         "Goldmoon": "Goldmoon",
@@ -714,7 +711,6 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
             if new_weather:
                 weather_msg = format_weather_message(new_weather)
                 
-                # В канал
                 try:
                     await context.bot.send_message(
                         chat_id=CHANNEL_ID,
@@ -725,7 +721,6 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     logger.error(f"❌ Ошибка отправки погоды в канал: {e}")
                 
-                # В группы (если включена погода)
                 for chat_id_str, settings in group_settings.items():
                     if settings.get("weather", False):
                         try:
@@ -738,7 +733,9 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                         except Exception as e:
                             logger.error(f"❌ Не отправлено в группу {chat_id_str}: {e}")
         
-        last_weather_data = new_weather        # === КАНАЛ (редкий сток) ===
+        last_weather_data = new_weather
+
+        # === КАНАЛ (редкий сток) ===
         current_rare_sig = json.dumps(new_rare_sig, sort_keys=True)
         if current_rare_sig != _last_rare_signature:
             rare_msg = format_rare_stock_for_channel(data)
