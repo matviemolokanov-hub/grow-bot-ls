@@ -706,12 +706,18 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
     try:
         resp = requests.get(API_URL, timeout=15)
         if resp.status_code != 200:
+            logger.warning(f"API вернул код {resp.status_code}")
             return
 
         data = resp.json()
         new_stock_sig = get_stock_signature(data)
         new_rare_sig = get_rare_stock_signature(data)
         new_weather = get_weather_type(data)
+
+        # === ДИАГНОСТИКА ПОГОДЫ ===
+        logger.info(f"🌤️ Текущая погода: {new_weather}")
+        logger.info(f"📊 Предыдущая погода: {last_weather_data}")
+        logger.info(f"📋 Данные погоды: {data.get('weather', {})}")
 
         # === ПОГОДА ===
         if last_weather_data is not None and new_weather != last_weather_data:
@@ -831,10 +837,10 @@ def main():
     app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CallbackQueryHandler(button_handler))
     
-    # Проверка каждые 10 секунд (было 60)
+    # Проверка каждые 10 секунд
     app.job_queue.run_repeating(check_and_notify, interval=10, first=5)
     
-    # Принудительная проверка через 2 секунды после запуска
+    # Принудительная проверка через 2 секунды
     app.job_queue.run_once(check_and_notify, when=2)
 
     logger.info("Бот запущен!")
