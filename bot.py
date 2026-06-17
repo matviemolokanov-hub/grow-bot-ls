@@ -282,6 +282,37 @@ def format_full_stock_message(data):
         msg += "\n"
     return msg
 
+# ================= КОМАНДА /WEATHER =================
+async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает текущую погоду"""
+    try:
+        resp = requests.get(API_URL, timeout=15)
+        if resp.status_code == 200:
+            data = resp.json()
+            weather_type = get_weather_type(data)
+            weather = data.get('weather', {})
+            weathers = weather.get('weathers', {})
+            
+            if weather_type:
+                weather_info = WEATHER_TYPES.get(weather_type, {"emoji": "☀️", "name": weather_type})
+                msg = f"🌤️ <b>ТЕКУЩАЯ ПОГОДА</b>\n\n"
+                msg += f"{weather_info['emoji']} <b>{weather_info['name']}</b>\n"
+                if isinstance(weathers.get(weather_type), dict):
+                    end_time = weathers[weather_type].get('endTime')
+                    if end_time:
+                        msg += f"⏱️ Длится до: {datetime.fromtimestamp(end_time).strftime('%H:%M:%S')} МСК\n"
+            else:
+                msg = "☀️ <b>Сейчас обычная погода</b>\n(нет активных эффектов)"
+            
+            msg += f"\n🕐 {get_msk_time().strftime('%H:%M:%S')} МСК"
+            msg += "\n\n🤖 Наш бот: @growagardenstock235_bot"
+            
+            await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+        else:
+            await update.message.reply_text("❌ Не удалось получить данные о погоде")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+
 # ================= МЕНЮ =================
 
 def get_main_menu():
@@ -835,6 +866,7 @@ def main():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_panel))
+    app.add_handler(CommandHandler("weather", weather_command))
     app.add_handler(CallbackQueryHandler(button_handler))
     
     # Проверка каждые 10 секунд
