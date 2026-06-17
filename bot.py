@@ -113,7 +113,6 @@ def load_items():
             all_items = get_all_items_from_api(resp.json())
             _items_cache_time = time.time()
             save_json(ITEMS_CACHE_FILE, {'items': all_items, 'timestamp': _items_cache_time})
-            logger.info(f"Загружено предметов: {len(all_items)}")
     except Exception as e:
         logger.error(f"Ошибка загрузки: {e}")
 
@@ -283,6 +282,7 @@ def format_full_stock_message(data):
         msg += "\n"
     return msg
 
+# ================= КОМАНДА /WEATHER =================
 async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает текущую погоду"""
     try:
@@ -745,7 +745,32 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
         new_rare_sig = get_rare_stock_signature(data)
         new_weather = get_weather_type(data)
 
-        # === ПОГОДА ===
+        # === ДИАГНОСТИКА ===
+        logger.info(f"🌤️ Текущая погода: {new_weather}")
+        logger.info(f"📊 Предыдущая погода: {last_weather_data}")
+
+        # === ПРИНУДИТЕЛЬНАЯ ОТПРАВКА ПРИ ПЕРВОМ ЗАПУСКЕ (ТОЛЬКО ЕСЛИ ЕСТЬ ПОГОДА) ===
+        if last_weather_data is None and new_weather:
+            logger.info(f"🔥 Первый запуск, отправляем текущую погоду: {new_weather}")
+            weather_msg = format_weather_message(new_weather)
+            
+            # В канал
+            try:
+                await context.bot.send_message(CHANNEL_ID, weather_msg, parse_mode=ParseMode.HTML)
+                logger.info(f"✅ Погода отправлена в канал (первый запуск): {new_weather}")
+            except Exception as e:
+                logger.error(f"❌ Ошибка отправки в канал: {e}")
+            
+            # В группы с включенной погодой
+            for chat_id_str, settings in group_settings.items():
+                if settings.get("weather", False):
+                    try:
+                        await context.bot.send_message(int(chat_id_str), weather_msg, parse_mode=ParseMode.HTML)
+                        logger.info(f"✅ Погода отправлена в группу (первый запуск): {chat_id_str}")
+                    except Exception as e:
+                        logger.error(f"❌ Не отправлено в группу: {e}")
+
+        # === ПОГОДА (при смене) ===
         if last_weather_data is not None and new_weather != last_weather_data:
             if new_weather:
                 weather_msg = format_weather_message(new_weather)
@@ -757,7 +782,7 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     logger.error(f"❌ Ошибка отправки погоды в канал: {e}")
                 
-                # В группы (если включена погода)
+                # В группы
                 for chat_id_str, settings in group_settings.items():
                     if settings.get("weather", False):
                         try:
@@ -776,7 +801,7 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                 try:
                     await context.bot.send_message(CHANNEL_ID, rare_msg, parse_mode=ParseMode.HTML)
                     _last_rare_signature = current_rare_sig
-                    logger.info(f"✅ Редкий сток отправлен в канал")
+                    logger.info(f"✅ Редкий сток отправлен в канал {CHANNEL_ID}")
                 except Exception as e:
                     logger.error(f"❌ Ошибка отправки в канал: {e}")
         else:
@@ -854,6 +879,9 @@ def main():
     
     # Проверка каждые 10 секунд
     app.job_queue.run_repeating(check_and_notify, interval=10, first=5)
+    
+    # Принудительная проверка через 2 секунды
+    app.job_queue.run_once(check_and_notify, when=2)
 
     logger.info("Бот запущен!")
     app.run_polling()
