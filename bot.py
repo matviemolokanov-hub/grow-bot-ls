@@ -34,12 +34,12 @@ FORCED_ITEMS = [
 WEATHER_TYPES = {
     "Rain": {"emoji": "🌧️", "name": "Дождь"},
     "Snowfall": {"emoji": "❄️", "name": "Снегопад"},
-    "Storm": {"emoji": "⛈️", "name": "Гроза"},
-    "BloodMoon": {"emoji": "🌕", "name": "Кровавая Луна"},
+    "Thunderstorm": {"emoji": "⛈️", "name": "Гроза"},
+    "Blood Moon": {"emoji": "🌕", "name": "Кровавая Луна"},
     "Starfall": {"emoji": "⭐", "name": "Звездопад"},
     "Midas": {"emoji": "✨", "name": "Золотая ночь"},
     "Goldmoon": {"emoji": "🌙", "name": "Золотая Луна"},
-    "RainbowMoon": {"emoji": "🌈", "name": "Радужная Луна"},
+    "Rainbow Moon": {"emoji": "🌈", "name": "Радужная Луна"},
     "Fog": {"emoji": "🌫️", "name": "Туман"},
     "Wind": {"emoji": "💨", "name": "Ветер"},
 }
