@@ -17,7 +17,7 @@ ITEMS_CACHE_FILE = "items_cache.json"
 CACHE_TTL = 300
 
 # ================= АДМИНЫ =================
-ADMIN_IDS = [7632708290, 5634818913]
+ADMIN_IDS = [7632708290]
 
 # ================= ЧТО ОТПРАВЛЯЕТСЯ =================
 RARE_RARITIES = ["Legendary", "Mythic", "Super"]
