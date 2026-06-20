@@ -742,6 +742,8 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                         logger.info(f"✅ Уведомление отправлено в чат {chat_id_str}")
                     except Exception as e:
                         logger.error(f"❌ Не отправлено в чат {chat_id_str}: {e}")
+                else:
+                    logger.info(f"⏸ Нет изменений по подпискам для группы {chat_id_str}, отправка пропущена")
 
             # === ЛС ===
             for uid, settings in user_settings.items():
@@ -789,7 +791,7 @@ def main():
     app.job_queue.run_repeating(check_and_notify, interval=10, first=5)
 
     logger.info("Бот запущен!")
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)  # ← Исправление конфликтов
 
 if __name__ == "__main__":
     main()
