@@ -31,6 +31,7 @@ FORCED_ITEMS = [
 
 # ================= ВСЕ ТИПЫ ПОГОДЫ =================
 WEATHER_TYPES = {
+    "Clear": {"emoji": "☀️", "name": "Обычная"},
     "Rain": {"emoji": "🌧️", "name": "Дождь"},
     "Snowfall": {"emoji": "❄️", "name": "Снегопад"},
     "Thunderstorm": {"emoji": "⛈️", "name": "Гроза"},
@@ -77,7 +78,7 @@ user_settings = load_json(DATA_FILE, {})
 group_settings = load_json(GROUP_SETTINGS_FILE, {})
 all_items = {}
 last_stock_data = None
-last_weather_data = None
+last_weather_data = None # Будет инициализировано при первом запросе
 _items_cache_time = 0
 
 # ================= КЕШИРОВАНИЕ =================
@@ -132,40 +133,40 @@ def get_changes(old, new):
     changed = {n: {'old': old[n], 'new': new[n]} for n in new if n in old and old[n] != new[n]}
     return added, removed, changed
 
-# ================= ОПРЕДЕЛЕНИЕ ПОГОДЫ (ИСПРАВЛЕНО) =================
+# ================= ОПРЕДЕЛЕНИЕ ПОГОДЫ =================
 def get_weather_type(data):
     weather = data.get('weather', {})
     weathers = weather.get('weathers', {})
     
-    # 1. Проверяем weathers (активные эффекты)
+    # 1. Проверяем активные эффекты
     for key in WEATHER_TYPES.keys():
-        if weathers.get(key) is True or weathers.get(key) == "true":
+        if key == "Clear": continue
+        val = weathers.get(key)
+        if val is True or val == "true":
             return key
-        if isinstance(weathers.get(key), dict) and weathers.get(key, {}).get("playing") is True:
+        if isinstance(val, dict) and val.get("playing") is True:
             return key
     
-    # 2. Проверяем phase (лунные фазы)
+    # 2. Проверяем лунные фазы
     phase = weather.get('phase', '')
-    phase_map = {
-        "Goldmoon": "Goldmoon",
-        "Blood Moon": "Blood Moon",
-        "Midas": "Midas",
-        "Starfall": "Starfall",
-        "Rainbow Moon": "Rainbow Moon",
-        "Aurora": "Aurora",
-    }
-    if phase in phase_map:
-        return phase_map[phase]
+    if phase in WEATHER_TYPES:
+        return phase
     
-    return None
+    return "Clear" # Если ничего не нашли, значит солнечно
 
 # ================= ФОРМАТИРОВАНИЕ =================
 
 def format_weather_message(weather_key):
     msk_time = get_msk_time()
-    weather_info = WEATHER_TYPES.get(weather_key, {"emoji": "☀️", "name": "Обычная"})
-    msg = f"🌤️ <b>ПОГОДА ИЗМЕНИЛАСЬ!</b>\n"
-    msg += f"{weather_info['emoji']} <b>{weather_info['name']}</b>\n"
+    weather_info = WEATHER_TYPES.get(weather_key, {"emoji": "❓", "name": weather_key})
+    
+    if weather_key == "Clear":
+        msg = f"🌤️ <b>ПОГОДА ИЗМЕНИЛАСЬ!</b>\n"
+        msg += f"☀️ <b>Обычная погода</b>\n"
+    else:
+        msg = f"🌤️ <b>ПОГОДА ИЗМЕНИЛАСЬ!</b>\n"
+        msg += f"{weather_info['emoji']} <b>{weather_info['name']}</b>\n"
+        
     msg += f"🕐 {msk_time.strftime('%H:%M:%S')} МСК\n"
     msg += "\n🤖 Наш бот: @growagardenstock235_bot"
     return msg
@@ -230,7 +231,8 @@ def format_full_stock_message(data):
     for shop_type, shop_name in [("SeedShop_Normal", "🌾 Семена"), ("CrateShop", "📦 Ящики"), ("GearShop", "⚙️ Снаряжение")]:
         msg += f"{shop_name}:\n"
         has = False
-        for item in data.get("shops", {}).get(shop_type, []):
+        items_sorted = data.get("shops", {}).get(shop_type, [])
+        for item in items_sorted:
             if item.get("stock", 0) > 0:
                 msg += f"• {item['name']} — {item['stock']} шт.\n"
                 has = True
@@ -249,16 +251,14 @@ async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             weather = data.get('weather', {})
             weathers = weather.get('weathers', {})
             
-            if weather_type:
-                weather_info = WEATHER_TYPES.get(weather_type, {"emoji": "☀️", "name": weather_type})
-                msg = f"🌤️ <b>ТЕКУЩАЯ ПОГОДА</b>\n\n"
-                msg += f"{weather_info['emoji']} <b>{weather_info['name']}</b>\n"
-                if isinstance(weathers.get(weather_type), dict):
-                    end_time = weathers[weather_type].get('endTime')
-                    if end_time:
-                        msg += f"⏱️ Длится до: {datetime.fromtimestamp(end_time).strftime('%H:%M:%S')} МСК\n"
-            else:
-                msg = "☀️ <b>Сейчас обычная погода</b>\n(нет активных эффектов)"
+            weather_info = WEATHER_TYPES.get(weather_type, {"emoji": "☀️", "name": "Обычная"})
+            msg = f"🌤️ <b>ТЕКУЩАЯ ПОГОДА</b>\n\n"
+            msg += f"{weather_info['emoji']} <b>{weather_info['name']}</b>\n"
+            
+            if weather_type != "Clear" and isinstance(weathers.get(weather_type), dict):
+                end_time = weathers[weather_type].get('endTime')
+                if end_time:
+                    msg += f"⏱️ Длится до: {datetime.fromtimestamp(end_time).strftime('%H:%M:%S')} МСК\n"
             
             msg += f"\n🕐 {get_msk_time().strftime('%H:%M:%S')} МСК"
             msg += "\n\n🤖 Наш бот: @growagardenstock235_bot"
@@ -445,12 +445,11 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(chat_id) not in group_settings:
         group_settings[str(chat_id)] = {"subscriptions": [], "weather": False}
         save_json(GROUP_SETTINGS_FILE, group_settings)
-        logger.info(f"Созданы настройки для группы: {chat_id}")
 
     await update.message.reply_text(
         "👑 <b>Админ-панель</b>\n\n"
-        "Здесь ты можешь настроить, какие предметы будут автоматически отправляться в этот чат при появлении в стоке.\n\n"
-        "🌤️ Погода — включает уведомления о смене погоды\n\n"
+        "Настрой уведомления для этой группы.\n\n"
+        "🌤️ Погода — уведомления о смене погоды\n\n"
         "✅ — предмет уже в списке\n"
         "❌ — не в списке",
         parse_mode=ParseMode.HTML,
@@ -490,7 +489,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if resp.status_code == 200:
                 await query.edit_message_text(format_full_stock_message(resp.json()), parse_mode=ParseMode.HTML, reply_markup=get_main_menu())
             else:
-                await query.edit_message_text("❌ Ошибка", reply_markup=get_main_menu())
+                await query.edit_message_text("❌ Ошибка API", reply_markup=get_main_menu())
         except Exception as e:
             await query.edit_message_text(f"❌ {e}", reply_markup=get_main_menu())
         return
@@ -513,28 +512,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         subscriptions = user_settings[user_id].get("subscriptions", [])
         subscriptions = [s for s in subscriptions if s != item_name]
         user_settings[user_id]["subscriptions"] = subscriptions
-        
-        if save_json(DATA_FILE, user_settings):
-            logger.info(f"Сохранены настройки пользователя {user_id}")
+        save_json(DATA_FILE, user_settings)
         
         if subscriptions:
-            await query.edit_message_text(
-                "📋 <b>Твои подписки</b>",
-                parse_mode=ParseMode.HTML,
-                reply_markup=get_subscriptions_menu(user_id)
-            )
+            await query.edit_message_text("📋 <b>Твои подписки</b>", parse_mode=ParseMode.HTML, reply_markup=get_subscriptions_menu(user_id))
         else:
-            await query.edit_message_text(
-                "📋 <b>Нет подписок</b>",
-                parse_mode=ParseMode.HTML,
-                reply_markup=get_main_menu()
-            )
+            await query.edit_message_text("📋 <b>Нет подписок</b>", parse_mode=ParseMode.HTML, reply_markup=get_main_menu())
         return
 
     elif data.startswith("category_"):
         category = data.replace("category_", "")
         await query.edit_message_text(f"📂 <b>{category}</b>", parse_mode=ParseMode.HTML, reply_markup=get_items_menu(user_id, category, 0))
-        context.user_data['current_category'] = category
         return
 
     elif data.startswith("item_"):
@@ -553,7 +541,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         user_settings[user_id]["subscriptions"] = subscriptions
         save_json(DATA_FILE, user_settings)
-        
         await query.edit_message_reply_markup(reply_markup=get_items_menu(user_id, category, page))
         return
 
@@ -624,8 +611,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if len(parts) == 3:
                 category_name = {"seed": "Семена", "crate": "Ящики", "gear": "Снаряжение"}.get(category, category)
                 await query.edit_message_text(f"📂 <b>{category_name}</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_items_menu(chat_id, category_name, action, 0))
-                context.user_data['admin_action'] = action
-                context.user_data['admin_category'] = category_name
                 return
             
             elif len(parts) >= 5:
@@ -633,7 +618,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 page = int(parts[3])
                 item_name = "_".join(parts[4:])
                 
-                subscriptions = group_settings.get(str(chat_id), {}).get("subscriptions", [])
+                settings = group_settings.get(str(chat_id), {"subscriptions": [], "weather": False})
+                subscriptions = settings.get("subscriptions", [])
+                
                 if action == "add":
                     if item_name not in subscriptions:
                         subscriptions.append(item_name)
@@ -642,13 +629,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if item_name in subscriptions:
                         subscriptions.remove(item_name)
                         await query.answer(f"❌ {item_name} удалён")
-                    else:
-                        await query.answer(f"⚠️ {item_name} не в списке")
-                        return
                 
-                group_settings[str(chat_id)] = {"subscriptions": subscriptions, "weather": group_settings.get(str(chat_id), {}).get("weather", False)}
+                settings["subscriptions"] = subscriptions
+                group_settings[str(chat_id)] = settings
                 save_json(GROUP_SETTINGS_FILE, group_settings)
-                
                 await query.edit_message_reply_markup(reply_markup=get_admin_items_menu(chat_id, category, action, page))
                 return
         
@@ -667,24 +651,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         elif data.startswith("admin_unsub_"):
             item_name = data.replace("admin_unsub_", "")
-            subscriptions = group_settings.get(str(chat_id), {}).get("subscriptions", [])
-            subscriptions = [s for s in subscriptions if s != item_name]
-            group_settings[str(chat_id)] = {"subscriptions": subscriptions, "weather": group_settings.get(str(chat_id), {}).get("weather", False)}
+            settings = group_settings.get(str(chat_id), {"subscriptions": [], "weather": False})
+            settings["subscriptions"] = [s for s in settings.get("subscriptions", []) if s != item_name]
+            group_settings[str(chat_id)] = settings
             save_json(GROUP_SETTINGS_FILE, group_settings)
-            await query.answer(f"❌ {item_name} удалён")
             
-            if subscriptions:
-                await query.edit_message_text(
-                    "📋 <b>Подписки группы</b>",
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=get_admin_subscriptions_menu(chat_id)
-                )
+            if settings["subscriptions"]:
+                await query.edit_message_text("📋 <b>Подписки группы</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_subscriptions_menu(chat_id))
             else:
-                await query.edit_message_text(
-                    "📋 <b>Нет подписок</b>",
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=get_admin_menu(chat_id)
-                )
+                await query.edit_message_text("👑 <b>Админ-панель</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_menu(chat_id))
             return
 
 # ================= ФОНОВАЯ ПРОВЕРКА =================
@@ -693,37 +668,35 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
     try:
         resp = requests.get(API_URL, timeout=15)
         if resp.status_code != 200:
-            logger.warning(f"API вернул код {resp.status_code}")
             return
 
         data = resp.json()
         new_stock_sig = get_stock_signature(data)
         new_weather = get_weather_type(data)
 
-        # === ДИАГНОСТИКА ===
-        logger.info(f"🌤️ Текущая погода: {new_weather}")
-        logger.info(f"📊 Предыдущая погода: {last_weather_data}")
+        # === ПРОВЕРКА ПОГОДЫ ===
+        if last_weather_data is None:
+            # При первом запуске просто запоминаем погоду без уведомлений
+            last_weather_data = new_weather
+        elif new_weather != last_weather_data:
+            # Погода изменилась
+            weather_msg = format_weather_message(new_weather)
+            
+            # Рассылка по группам
+            for chat_id_str, settings in group_settings.items():
+                if settings.get("weather", False):
+                    try:
+                        await context.bot.send_message(
+                            chat_id=int(chat_id_str),
+                            text=weather_msg,
+                            parse_mode=ParseMode.HTML
+                        )
+                    except Exception as e:
+                        logger.error(f"Ошибка погоды в {chat_id_str}: {e}")
+            
+            last_weather_data = new_weather
 
-        # === ПОГОДА ===
-        if last_weather_data is not None and new_weather != last_weather_data:
-            if new_weather:
-                weather_msg = format_weather_message(new_weather)
-                
-                # Отправляем во все группы, где включена погода
-                for chat_id_str, settings in group_settings.items():
-                    if settings.get("weather", False):
-                        try:
-                            await context.bot.send_message(
-                                chat_id=int(chat_id_str),
-                                text=weather_msg,
-                                parse_mode=ParseMode.HTML
-                            )
-                            logger.info(f"✅ Погода отправлена в группу {chat_id_str}: {new_weather}")
-                        except Exception as e:
-                            logger.error(f"❌ Не отправлено в группу {chat_id_str}: {e}")
-        
-        last_weather_data = new_weather
-
+        # === ПРОВЕРКА СТОКА ===
         if last_stock_data is None:
             last_stock_data = new_stock_sig
             return
@@ -731,64 +704,39 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
         added, removed, changed = get_changes(last_stock_data, new_stock_sig)
 
         if added or removed or changed:
-            logger.info(f"Изменения: +{len(added)} -{len(removed)} ~{len(changed)}")
-
-            # === ОТПРАВКА В ГРУППЫ ПО АДМИН-ПАНЕЛИ ===
+            # В Группы
             for chat_id_str, settings in group_settings.items():
-                subscriptions = settings.get("subscriptions", [])
-                if not subscriptions:
-                    continue
+                subs = settings.get("subscriptions", [])
+                g_added = {n: s for n, s in added.items() if n in subs}
+                g_changed = {n: c for n, c in changed.items() if n in subs}
+                g_removed = {n for n in removed if n in subs}
 
-                group_added = {n: s for n, s in added.items() if n in subscriptions}
-                group_changed = {n: c for n, c in changed.items() if n in subscriptions}
-                group_removed = {n for n in removed if n in subscriptions}
-
-                if group_added or group_changed or group_removed:
-                    msg = format_group_stock_message(group_added, group_changed, group_removed)
+                if g_added or g_changed or g_removed:
+                    msg = format_group_stock_message(g_added, g_changed, g_removed)
                     try:
-                        await context.bot.send_message(
-                            chat_id=int(chat_id_str),
-                            text=msg,
-                            parse_mode=ParseMode.HTML
-                        )
-                        logger.info(f"✅ Уведомление отправлено в чат {chat_id_str}")
-                    except Exception as e:
-                        logger.error(f"❌ Не отправлено в чат {chat_id_str}: {e}")
-                else:
-                    logger.info(f"⏸ Нет изменений по подпискам для группы {chat_id_str}")
+                        await context.bot.send_message(chat_id=int(chat_id_str), text=msg, parse_mode=ParseMode.HTML)
+                    except: pass
 
-            # === ЛС ===
+            # В ЛС
             for uid, settings in user_settings.items():
                 subs = settings.get("subscriptions", [])
-                if not subs:
-                    continue
-
                 u_added = {n: s for n, s in added.items() if n in subs}
                 u_changed = {n: c for n, c in changed.items() if n in subs}
                 u_removed = {n for n in removed if n in subs}
 
                 if u_added or u_changed or u_removed:
                     msg = f"📢 <b>Изменения в стоке!</b>\n🕐 {get_msk_time().strftime('%H:%M:%S')} МСК\n\n"
-                    if u_added:
-                        msg += "🟢 Появились:\n" + "\n".join([f"• {n} — {s} шт." for n, s in u_added.items()]) + "\n\n"
-                    if u_changed:
-                        msg += "🟡 Изменилось:\n" + "\n".join([f"• {n}: {c['old']} → {c['new']} шт." for n, c in u_changed.items()]) + "\n\n"
-                    if u_removed:
-                        msg += "🔴 Пропали:\n" + "\n".join([f"• {n}" for n in u_removed]) + "\n"
-
+                    if u_added: msg += "🟢 Появились:\n" + "\n".join([f"• {n} — {s} шт." for n, s in u_added.items()]) + "\n\n"
+                    if u_changed: msg += "🟡 Изменилось:\n" + "\n".join([f"• {n}: {c['old']} → {c['new']} шт." for n, c in u_changed.items()]) + "\n\n"
+                    if u_removed: msg += "🔴 Пропали:\n" + "\n".join([f"• {n}" for n in u_removed]) + "\n"
                     try:
-                        await context.bot.send_message(
-                            chat_id=int(uid),
-                            text=msg,
-                            parse_mode=ParseMode.HTML
-                        )
-                    except Exception as e:
-                        logger.error(f"❌ Не отправлено в ЛС {uid}: {e}")
+                        await context.bot.send_message(chat_id=int(uid), text=msg, parse_mode=ParseMode.HTML)
+                    except: pass
 
         last_stock_data = new_stock_sig
 
     except Exception as e:
-        logger.error(f"Ошибка проверки: {e}")
+        logger.error(f"Ошибка цикла: {e}")
 
 # ================= ЗАПУСК =================
 def main():
