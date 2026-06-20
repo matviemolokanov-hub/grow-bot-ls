@@ -8,7 +8,7 @@ from telegram.constants import ParseMode
 import os
 import time
 
-# ================= НАСТРОЙКИ ================
+# ================= НАСТРОЙКИ =================
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 API_URL = "https://grow-a-garden-2-tracker.onrender.com/api/stock"
 DATA_FILE = "user_settings.json"
@@ -19,9 +19,8 @@ CACHE_TTL = 300
 # ================= АДМИНЫ =================
 ADMIN_IDS = [7632708290, 5634818913]
 
-# ================= ЧТО ОТПРАВЛЯЕТСЯ (принудительно) =================
-# Только для канала (но канал отключён)
-# Для групп — только то, что выбрано в админ-панели
+# ================= ЧТО ОТПРАВЛЯЕТСЯ В КАНАЛ =================
+RARE_RARITIES = ["Legendary", "Mythic", "Super"]
 FORCED_ITEMS = [
     "Mushroom",
     "Moon Bloom",
@@ -702,7 +701,7 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"🌤️ Текущая погода: {new_weather}")
         logger.info(f"📊 Предыдущая погода: {last_weather_data}")
 
-        # === ПОГОДА (только в группы) ===
+        # === ПОГОДА ===
         if last_weather_data is not None and new_weather != last_weather_data:
             if new_weather:
                 weather_msg = format_weather_message(new_weather)
