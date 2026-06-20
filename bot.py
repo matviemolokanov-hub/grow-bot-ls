@@ -6,14 +6,14 @@ import asyncio
 
 # ================= НАСТРОЙКИ =================
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-ADMIN_IDS = [7632708290]  # Ваш ID
+ADMIN_IDS = [7632708290, 7984330474]  # Ваш ID
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ================= КОМАНДА СПАМА =================
 async def spam(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Спамит в группу указанное количество сообщений"""
+    """Спамит в группу указанное количество сообщений (максимально быстро)"""
     user_id = update.effective_user.id
     
     if user_id not in ADMIN_IDS:
@@ -36,8 +36,8 @@ async def spam(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Количество должно быть числом")
         return
     
-    if count > 50:
-        await update.message.reply_text("Максимум 50")
+    if count > 100:
+        await update.message.reply_text("Максимум 100")
         return
     if count < 1:
         await update.message.reply_text("Минимум 1")
@@ -47,13 +47,16 @@ async def spam(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(f"Начинаю спам: {count} сообщений")
     
+    # Отправляем все сообщения максимально быстро
     for i in range(count):
         try:
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=text
             )
-            await asyncio.sleep(0.3)
+            # Почти без задержки - только чтобы не упасть от rate limit
+            if i % 20 == 0:
+                await asyncio.sleep(0.05)
         except Exception as e:
             logger.error(f"Ошибка: {e}")
             break
