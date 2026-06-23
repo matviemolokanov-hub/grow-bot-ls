@@ -628,16 +628,27 @@ def get_subscriptions_menu(user_id, page=0):
     keyboard.append([InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_menu")])
     return InlineKeyboardMarkup(keyboard)
 
-# ================= ОБРАБОТЧИК КНОПОК =================
+# ================= ОБРАБОТЧИК КНОПОК С ЛОГИРОВАНИЕМ =================
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # ПЕРВАЯ СТРОКА - логируем ВСЁ
+    logger.info("=" * 50)
+    logger.info("🔔 ВХОД В button_handler")
+    logger.info(f"📦 update: {update}")
+    
     try:
         query = update.callback_query
+        logger.info(f"🔍 query: {query}")
+        
+        if query is None:
+            logger.error("❌ query is None!")
+            return
+            
         user_id = str(query.from_user.id)
         chat_id = query.message.chat_id
         data = query.data
 
-        logger.info(f"📥 ПОЛУЧЕН callback: {data} от {user_id}")
+        logger.info(f"📥 ПОЛУЧЕН callback: {data} от {user_id} в чате {chat_id}")
 
         if data == "ignore":
             await query.answer()
@@ -651,6 +662,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # === ОБЫЧНЫЕ КНОПКИ ===
         if data == "back_to_menu":
+            logger.info("↩️ Возврат в главное меню")
             items = load_items()
             await safe_edit(
                 query,
@@ -661,6 +673,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         elif data == "show_full_stock":
+            logger.info("📦 Показ полного стока")
             try:
                 resp = requests.get(API_URL, timeout=15)
                 if resp.status_code == 200:
@@ -672,6 +685,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         elif data == "show_multipliers":
+            logger.info("📊 Показ мультипликаторов")
             msg = format_multipliers_message()
             await safe_edit(query, text=msg, reply_markup=get_main_menu())
             multiplier_messages[str(chat_id)] = query.message.message_id
@@ -679,6 +693,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         elif data == "view_subscriptions":
+            logger.info("📋 Показ подписок пользователя")
             subscriptions = user_settings[user_id].get("subscriptions", [])
             if not subscriptions:
                 await safe_edit(query, text="📋 <b>Нет подписок</b>", reply_markup=get_main_menu())
@@ -693,6 +708,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         elif data.startswith("unsub_"):
             item_name = data.replace("unsub_", "")
+            logger.info(f"❌ Отписка от {item_name}")
             subscriptions = user_settings[user_id].get("subscriptions", [])
             subscriptions = [s for s in subscriptions if s != item_name]
             user_settings[user_id]["subscriptions"] = subscriptions
@@ -706,6 +722,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         elif data.startswith("category_"):
             category = data.replace("category_", "")
+            logger.info(f"📂 Выбрана категория: {category}")
             await safe_edit(query, text=f"📂 <b>{category}</b>", reply_markup=get_items_menu(user_id, category, 0))
             return
 
@@ -714,6 +731,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             category = parts[1]
             page = int(parts[2])
             item_name = "_".join(parts[3:])
+            
+            logger.info(f"📦 Нажат предмет: {item_name} в категории {category}")
             
             subscriptions = user_settings[user_id].get("subscriptions", [])
             if item_name in subscriptions:
@@ -737,6 +756,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # === АДМИН-КНОПКИ ===
         elif data.startswith("admin_"):
+            logger.info(f"👑 Админ-кнопка: {data}")
+            
             if int(user_id) not in ADMIN_IDS:
                 await safe_edit(query, text="❌ Нет прав!")
                 return
@@ -758,6 +779,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             
             elif data == "admin_view_subs":
+                logger.info("📋 Просмотр подписок группы")
                 subscriptions = group_settings.get(str(chat_id), {}).get("subscriptions", [])
                 if not subscriptions:
                     await safe_edit(query, text="📋 <b>Нет подписок</b>", reply_markup=get_admin_menu(chat_id))
@@ -766,6 +788,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             
             elif data == "admin_toggle_weather":
+                logger.info("🌤️ Переключение погоды")
                 settings = group_settings.get(str(chat_id), {"subscriptions": [], "weather": False})
                 settings["weather"] = not settings.get("weather", False)
                 group_settings[str(chat_id)] = settings
@@ -776,16 +799,19 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             
             elif data == "admin_add_items":
+                logger.info("➕ Добавление предметов")
                 context.user_data['admin_action'] = 'add'
                 await safe_edit(query, text="📂 <b>Выбери категорию:</b>", reply_markup=get_admin_category_menu('add'))
                 return
             
             elif data == "admin_remove_items":
+                logger.info("➖ Удаление предметов")
                 context.user_data['admin_action'] = 'remove'
                 await safe_edit(query, text="📂 <b>Выбери категорию:</b>", reply_markup=get_admin_category_menu('remove'))
                 return
             
             elif data == "admin_clear_all":
+                logger.info("🗑️ Очистка всех подписок")
                 group_settings[str(chat_id)] = {"subscriptions": [], "weather": group_settings.get(str(chat_id), {}).get("weather", False)}
                 save_json(GROUP_SETTINGS_FILE, group_settings)
                 await query.answer("🗑️ Все подписки очищены")
@@ -799,6 +825,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
                 if len(parts) == 3:
                     category_name = {"seed": "Семена", "crate": "Ящики", "gear": "Снаряжение"}.get(category, category)
+                    logger.info(f"📂 Выбрана категория: {category_name}")
                     await safe_edit(
                         query, 
                         text=f"📂 <b>{category_name}</b>", 
@@ -810,6 +837,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     category = parts[2]
                     page = int(parts[3])
                     item_name = "_".join(parts[4:])
+                    
+                    logger.info(f"📦 {action} предмет: {item_name}")
                     
                     settings = group_settings.get(str(chat_id), {"subscriptions": [], "weather": False})
                     subscriptions = settings.get("subscriptions", [])
@@ -848,6 +877,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             elif data.startswith("admin_unsub_"):
                 item_name = data.replace("admin_unsub_", "")
+                logger.info(f"❌ Удаление подписки: {item_name}")
                 settings = group_settings.get(str(chat_id), {"subscriptions": [], "weather": False})
                 settings["subscriptions"] = [s for s in settings.get("subscriptions", []) if s != item_name]
                 group_settings[str(chat_id)] = settings
@@ -861,6 +891,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             
             logger.warning(f"⚠️ Неизвестный admin callback: {data}")
+            
+        else:
+            logger.warning(f"⚠️ Неизвестный callback: {data}")
 
     except Exception as e:
         logger.error(f"❌ Ошибка в button_handler: {e}")
@@ -1019,6 +1052,10 @@ def main():
     group_settings = load_json(GROUP_SETTINGS_FILE, {})
     predict_messages = load_json(PREDICT_MESSAGES_FILE, {})
     multiplier_messages = load_json(MULTIPLIER_MESSAGES_FILE, {})
+    
+    # Проверка версии библиотеки
+    import telegram
+    logger.info(f"📦 Версия python-telegram-bot: {telegram.__version__}")
     
     load_items()
     get_multipliers()
