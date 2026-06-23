@@ -13,9 +13,15 @@ TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 API_URL = "https://grow-a-garden-2-tracker.onrender.com/api/stock"
 PREDICT_URL = "https://grow-a-garden-2-tracker.onrender.com/api/predictions"
 
-DATA_FILE = "user_settings.json"
-GROUP_SETTINGS_FILE = "group_settings.json"
-ITEMS_CACHE_FILE = "items_cache.json"
+# Путь для сохранения файлов на Railway
+DATA_DIR = "/app/data" if os.path.exists("/app") else "."
+os.makedirs(DATA_DIR, exist_ok=True)
+
+DATA_FILE = os.path.join(DATA_DIR, "user_settings.json")
+GROUP_SETTINGS_FILE = os.path.join(DATA_DIR, "group_settings.json")
+ITEMS_CACHE_FILE = os.path.join(DATA_DIR, "items_cache.json")
+PREDICT_MESSAGES_FILE = os.path.join(DATA_DIR, "predict_messages.json")
+
 CACHE_TTL = 300
 
 # ================= АДМИНЫ =================
@@ -41,7 +47,7 @@ WEATHER_TYPES = {
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
-    handlers=[logging.FileHandler('bot.log', encoding='utf-8'), logging.StreamHandler()]
+    handlers=[logging.FileHandler(os.path.join(DATA_DIR, 'bot.log'), encoding='utf-8'), logging.StreamHandler()]
 )
 logger = logging.getLogger(__name__)
 
@@ -57,13 +63,17 @@ def format_timestamp(ts):
 # ================= СОХРАНЕНИЕ =================
 def load_json(filename, default=None):
     try:
-        with open(filename, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except:
+        if os.path.exists(filename):
+            with open(filename, "r", encoding="utf-8") as f:
+                return json.load(f)
+        return default if default is not None else {}
+    except Exception as e:
+        logger.error(f"Ошибка загрузки {filename}: {e}")
         return default if default is not None else {}
 
 def save_json(filename, data):
     try:
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
         with open(filename, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         return True
@@ -71,6 +81,7 @@ def save_json(filename, data):
         logger.error(f"Ошибка сохранения {filename}: {e}")
         return False
 
+# Глобальные переменные
 user_settings = load_json(DATA_FILE, {})
 group_settings = load_json(GROUP_SETTINGS_FILE, {})
 all_items = {}
@@ -79,7 +90,7 @@ last_weather_data = None
 _items_cache_time = 0
 
 # Храним ID сообщения предсказаний для автообновления
-predict_messages = {}  # {chat_id: message_id}
+predict_messages = load_json(PREDICT_MESSAGES_FILE, {})
 
 # ================= КЕШИРОВАНИЕ =================
 def get_all_items_from_api(data):
@@ -365,7 +376,7 @@ async def predict_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Сохраняем ID сообщения для автообновления
     predict_messages[chat_id] = sent.message_id
-    save_json("predict_messages.json", predict_messages)
+    save_json(PREDICT_MESSAGES_FILE, predict_messages)
 
 async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -483,7 +494,9 @@ def get_admin_items_menu(chat_id, category, action, page=0):
     items_list = [name for name, info in items.items() if info.get('category') == category]
     items_list.sort()
 
-    total_pages = (len(items_list) + items_per_page - 1) // items_per_page
+    total_pages = max(1, (len(items_list) + items_per_page - 1) // items_per_page)
+    page = max(0, min(page, total_pages - 1))
+    
     start = page * items_per_page
     end = start + items_per_page
     current_items = items_list[start:end]
@@ -508,7 +521,9 @@ def get_admin_items_menu(chat_id, category, action, page=0):
 def get_admin_subscriptions_menu(chat_id, page=0):
     subscriptions = group_settings.get(str(chat_id), {}).get("subscriptions", [])
     items_per_page = 10
-    total_pages = (len(subscriptions) + items_per_page - 1) // items_per_page
+    total_pages = max(1, (len(subscriptions) + items_per_page - 1) // items_per_page)
+    page = max(0, min(page, total_pages - 1))
+    
     start = page * items_per_page
     end = start + items_per_page
     current_subs = subscriptions[start:end]
@@ -536,7 +551,9 @@ def get_items_menu(user_id, category, page=0):
     items_list = [name for name, info in items.items() if info.get('category') == category]
     items_list.sort()
 
-    total_pages = (len(items_list) + items_per_page - 1) // items_per_page
+    total_pages = max(1, (len(items_list) + items_per_page - 1) // items_per_page)
+    page = max(0, min(page, total_pages - 1))
+    
     start = page * items_per_page
     end = start + items_per_page
     current_items = items_list[start:end]
@@ -561,7 +578,9 @@ def get_items_menu(user_id, category, page=0):
 def get_subscriptions_menu(user_id, page=0):
     subscriptions = user_settings.get(str(user_id), {}).get("subscriptions", [])
     items_per_page = 10
-    total_pages = (len(subscriptions) + items_per_page - 1) // items_per_page
+    total_pages = max(1, (len(subscriptions) + items_per_page - 1) // items_per_page)
+    page = max(0, min(page, total_pages - 1))
+    
     start = page * items_per_page
     end = start + items_per_page
     current_subs = subscriptions[start:end]
@@ -794,7 +813,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def update_predictions_job(context: ContextTypes.DEFAULT_TYPE):
     """Автообновление предсказаний каждые 30 секунд"""
     if not predict_messages:
-        saved = load_json("predict_messages.json", {})
+        saved = load_json(PREDICT_MESSAGES_FILE, {})
         if saved:
             predict_messages.update(saved)
         else:
@@ -823,10 +842,10 @@ async def update_predictions_job(context: ContextTypes.DEFAULT_TYPE):
     for dc in dead_chats:
         predict_messages.pop(dc, None)
     if dead_chats:
-        save_json("predict_messages.json", predict_messages)
+        save_json(PREDICT_MESSAGES_FILE, predict_messages)
 
 async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
-    global last_stock_data, last_weather_data
+    global last_stock_data, last_weather_data, user_settings, group_settings
     try:
         resp = requests.get(API_URL, timeout=15)
         if resp.status_code != 200:
@@ -906,6 +925,12 @@ def main():
         logger.error("Токен не найден!")
         return
 
+    # Загружаем данные при старте
+    global user_settings, group_settings, predict_messages
+    user_settings = load_json(DATA_FILE, {})
+    group_settings = load_json(GROUP_SETTINGS_FILE, {})
+    predict_messages = load_json(PREDICT_MESSAGES_FILE, {})
+    
     load_items()
 
     app = Application.builder().token(TOKEN).build()
