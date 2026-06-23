@@ -58,7 +58,8 @@ def get_msk_time():
     return datetime.now(timezone(timedelta(hours=3)))
 
 def format_timestamp(ts):
-    if not ts or ts == 0: return "—"
+    if not ts or ts == 0:
+        return "—"
     return datetime.fromtimestamp(ts, timezone(timedelta(hours=3))).strftime('%H:%M:%S')
 
 def load_json(filename, default=None):
@@ -124,7 +125,11 @@ def load_items():
                 for item in data.get("shops", {}).get(shop_key, []):
                     name = item.get('name')
                     if name:
-                        new_items[name] = {'name': name, 'rarity': item.get('rarity', 'Common'), 'category': cat_name}
+                        new_items[name] = {
+                            'name': name,
+                            'rarity': item.get('rarity', 'Common'),
+                            'category': cat_name
+                        }
             all_items = new_items
             _items_cache_time = time.time()
             save_json(ITEMS_CACHE_FILE, {'items': all_items, 'timestamp': _items_cache_time})
@@ -140,7 +145,8 @@ def get_multipliers():
             mults = resp.json().get('fruitMultipliers', [])
             mults.sort(key=lambda x: x.get('multiplier', 0), reverse=True)
             return mults
-    except: pass
+    except:
+        pass
     return []
 
 def get_predictions_data():
@@ -154,12 +160,14 @@ def get_predictions_data():
 
 # ================= ФОРМАТИРОВАНИЕ СООБЩЕНИЙ =================
 def format_predict_msg(data):
-    if not data: return "❌ Ошибка данных"
+    if not data:
+        return "❌ Ошибка данных"
     now = time.time()
     msk_time = get_msk_time().strftime('%H:%M:%S')
-    msg = f"🔮 <b>ПРЕДСКАЗАНИЯ</b>\n🔄 <i>Обновлено: {msk_time} МСК</i>\n" + "═" * 30 + "\n\n"
-    
-    # Погода
+    msg = f"🔮 <b>ПРЕДСКАЗАНИЯ</b>\n🔄 <i>Обновлено: {msk_time} МСК</i>\n"
+    msg += "═" * 30 + "\n\n"
+
+    # Погода (лунные фазы)
     weathers = sorted([w for w in data.get('weathers', []) if w.get('timestamp', 0) > now], key=lambda x: x['timestamp'])[:10]
     if weathers:
         msg += "🌙 <b>ЛУННЫЕ ФАЗЫ</b>\n"
@@ -176,15 +184,18 @@ def format_predict_msg(data):
         msg += "\n"
 
     # Редкий сток
-    important = ["Dragon's Breath", "Moon Bloom", "Venom Spitter", "Sunflower", "Legendary Sprinkler", "Super Sprinkler", "Super Watering Can"]
+    important = ["Dragon's Breath", "Moon Bloom", "Venom Spitter", "Sunflower",
+                 "Legendary Sprinkler", "Super Sprinkler", "Super Watering Can"]
     all_p = data.get('seeds', []) + data.get('gears', []) + data.get('props', [])
-    
+
     stock_now = [i for i in all_p if i.get('relativeText') == "*Currently on Stock*" and i.get('name') in important]
-    upcoming = sorted([i for i in all_p if i.get('name') in important and i.get('timestamp', 0) > now], key=lambda x: x['timestamp'])[:15]
-    past = sorted([i for i in all_p if i.get('name') in important and i.get('timestamp', 0) < now and i.get('relativeText') != "*Currently on Stock*"], key=lambda x: x['timestamp'], reverse=True)[:10]
-    
+    upcoming = sorted([i for i in all_p if i.get('name') in important and i.get('timestamp', 0) > now],
+                      key=lambda x: x['timestamp'])[:15]
+    past = sorted([i for i in all_p if i.get('name') in important and i.get('timestamp', 0) < now and i.get('relativeText') != "*Currently on Stock*"],
+                  key=lambda x: x['timestamp'], reverse=True)[:10]
+
     msg += "📦 <b>РЕДКИЙ СТОК</b>\n"
-    
+
     if stock_now:
         msg += "  🟢 <b>В НАЛИЧИИ СЕЙЧАС:</b>\n"
         for i in stock_now[:10]:
@@ -194,7 +205,7 @@ def format_predict_msg(data):
         msg += "\n"
     else:
         msg += "  🟢 <b>В НАЛИЧИИ СЕЙЧАС:</b> Нет\n\n"
-    
+
     if upcoming:
         msg += "  ⏳ <b>ОЖИДАЙТЕ В БЛИЖАЙШЕЕ ВРЕМЯ:</b>\n"
         for i in upcoming:
@@ -206,7 +217,7 @@ def format_predict_msg(data):
         msg += "\n"
     else:
         msg += "  ⏳ <b>ОЖИДАЙТЕ В БЛИЖАЙШЕЕ ВРЕМЯ:</b> Нет\n\n"
-    
+
     if past:
         msg += "  🕐 <b>БЫЛИ В СТОКЕ:</b>\n"
         for i in past:
@@ -215,16 +226,18 @@ def format_predict_msg(data):
             msg += f"    • {name} — {format_timestamp(ts)}\n"
     else:
         msg += "  🕐 <b>БЫЛИ В СТОКЕ:</b> Нет\n"
-    
+
     msg += "\n" + "═" * 30 + "\n"
     msg += "🤖 Наш бот: @growagardenstock235_bot"
     return msg
 
 def format_multipliers_message():
     mults = get_multipliers()
-    if not mults: return "❌ Нет данных"
-    msg = f"📊 <b>МУЛЬТИПЛИКАТОРЫ ПРЕДМЕТОВ</b>\n🔄 <i>Обновлено: {get_msk_time().strftime('%H:%M:%S')} МСК</i>\n" + "═" * 30 + "\n\n"
-    
+    if not mults:
+        return "❌ Нет данных"
+    msg = f"📊 <b>МУЛЬТИПЛИКАТОРЫ ПРЕДМЕТОВ</b>\n🔄 <i>Обновлено: {get_msk_time().strftime('%H:%M:%S')} МСК</i>\n"
+    msg += "═" * 30 + "\n\n"
+
     high = []
     low = []
     for item in mults:
@@ -234,14 +247,14 @@ def format_multipliers_message():
             high.append(f"    • {name} — <b>x{mult:.2f}</b>")
         else:
             low.append(f"    • {name} — <b>x{mult:.2f}</b>")
-    
+
     if high:
         msg += "  🟢 <b>ВЫСОКИЕ МУЛЬТИПЛИКАТОРЫ (1.0+):</b>\n"
         msg += "\n".join(high) + "\n\n"
     if low:
         msg += "  🔴 <b>НИЗКИЕ МУЛЬТИПЛИКАТОРЫ (&lt;1.0):</b>\n"
         msg += "\n".join(low) + "\n"
-    
+
     msg += "\n" + "═" * 30 + "\n"
     msg += "💡 <i>Чем выше множитель, тем дороже предмет при продаже</i>\n"
     msg += "🤖 Наш бот: @growagardenstock235_bot"
@@ -277,7 +290,8 @@ def get_weather_type(data):
     weather = data.get('weather', {})
     weathers = weather.get('weathers', {})
     for key in WEATHER_TYPES.keys():
-        if key == "Clear": continue
+        if key == "Clear":
+            continue
         val = weathers.get(key)
         if val is True or val == "true":
             return key
@@ -301,20 +315,18 @@ def get_changes(old, new):
     changed = {n: {'old': old[n], 'new': new[n]} for n in new if n in old and old[n] != new[n]}
     return added, removed, changed
 
-# ================= ФОРМАТИРОВАНИЕ ЕДИНОГО УВЕДОМЛЕНИЯ О СТОКЕ =================
 def format_stock_update_message(added, changed, removed):
     """
     Форматирует единое сообщение об обновлении стока.
     added: dict {name: stock}
     changed: dict {name: {'old': old_stock, 'new': new_stock}}
-    removed: list of names (или dict, но мы передаём список имён)
+    removed: список имён удалённых предметов
     """
     msk_time = get_msk_time()
     cat_emojis = {"Семена": "🌾", "Ящики": "📦", "Снаряжение": "⚙️"}
     categories = {}
 
     # Собираем все изменения по категориям
-    # Добавленные
     for name, stock in added.items():
         info = all_items.get(name, {})
         cat = info.get('category', 'Неизвестно')
@@ -322,7 +334,6 @@ def format_stock_update_message(added, changed, removed):
             categories[cat] = {'added': [], 'changed': [], 'removed': []}
         categories[cat]['added'].append((name, stock, info.get('rarity', 'Common')))
 
-    # Изменённые (показываем новое количество)
     for name, change in changed.items():
         info = all_items.get(name, {})
         cat = info.get('category', 'Неизвестно')
@@ -330,7 +341,6 @@ def format_stock_update_message(added, changed, removed):
             categories[cat] = {'added': [], 'changed': [], 'removed': []}
         categories[cat]['changed'].append((name, change['new'], info.get('rarity', 'Common')))
 
-    # Удалённые (принимаем как список имён)
     for name in removed:
         info = all_items.get(name, {})
         cat = info.get('category', 'Неизвестно')
@@ -338,11 +348,9 @@ def format_stock_update_message(added, changed, removed):
             categories[cat] = {'added': [], 'changed': [], 'removed': []}
         categories[cat]['removed'].append((name, info.get('rarity', 'Common')))
 
-    # Если нет изменений — возвращаем None
     if not categories:
         return None
 
-    # Формируем сообщение
     msg = f"📢 <b>ОБНОВЛЕНИЕ СТОКА!</b>\n"
     msg += f"🕐 {msk_time.strftime('%H:%M:%S')} МСК\n"
     msg += "─" * 25 + "\n\n"
@@ -350,23 +358,16 @@ def format_stock_update_message(added, changed, removed):
     for category, items in categories.items():
         cat_emoji = cat_emojis.get(category, "📌")
         msg += f"{cat_emoji} <b>{category}</b>\n"
-
-        # Добавленные
         if items['added']:
             for name, stock, rarity in items['added']:
                 msg += f"  • {name} — <b>{stock} шт.</b> ({rarity})\n"
-
-        # Изменённые
         if items['changed']:
             for name, stock, rarity in items['changed']:
                 msg += f"  • {name} — <b>{stock} шт.</b> ({rarity})\n"
-
-        # Удалённые
         if items['removed']:
             for name, rarity in items['removed']:
                 msg += f"  • {name} ({rarity})\n"
-
-        msg += "\n"  # Разделитель между категориями
+        msg += "\n"
 
     msg += "🤖 Наш бот: @growagardenstock235_bot"
     return msg
@@ -392,21 +393,24 @@ def get_items_menu(user_id, category, page=0, is_admin=False, chat_id=None):
     per_page = 10
     total_pages = max(1, (len(filtered) - 1) // per_page + 1) if filtered else 1
     page = max(0, min(page, total_pages - 1))
-    
+
     start = page * per_page
     current_items = filtered[start:start + per_page]
-    
+
     keyboard = []
     prefix = "aitm" if is_admin else "itm"
     for name in current_items:
         status = "✅" if name in subs else "❌"
         keyboard.append([InlineKeyboardButton(f"{status} {name}", callback_data=f"{prefix}_{category}_{page}_{name}")])
-    
+
     nav = []
-    if page > 0: nav.append(InlineKeyboardButton("◀️", callback_data=f"pg_{prefix}_{category}_{page-1}"))
-    if page < total_pages - 1: nav.append(InlineKeyboardButton("▶️", callback_data=f"pg_{prefix}_{category}_{page+1}"))
-    if nav: keyboard.append(nav)
-    
+    if page > 0:
+        nav.append(InlineKeyboardButton("◀️", callback_data=f"pg_{prefix}_{category}_{page-1}"))
+    if page < total_pages - 1:
+        nav.append(InlineKeyboardButton("▶️", callback_data=f"pg_{prefix}_{category}_{page+1}"))
+    if nav:
+        keyboard.append(nav)
+
     back_data = "admin_main" if is_admin else "menu"
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data=back_data)])
     return InlineKeyboardMarkup(keyboard)
@@ -429,16 +433,19 @@ def get_subscriptions_menu(user_id, page=0):
     page = max(0, min(page, total_pages - 1))
     start = page * items_per_page
     current_subs = subscriptions[start:start + items_per_page]
-    
+
     keyboard = []
     for sub in current_subs:
         keyboard.append([InlineKeyboardButton(f"❌ {sub}", callback_data=f"unsub_{sub}")])
-    
+
     nav = []
-    if page > 0: nav.append(InlineKeyboardButton("◀️", callback_data=f"sub_page_{page-1}"))
-    if page < total_pages - 1: nav.append(InlineKeyboardButton("▶️", callback_data=f"sub_page_{page+1}"))
-    if nav: keyboard.append(nav)
-    
+    if page > 0:
+        nav.append(InlineKeyboardButton("◀️", callback_data=f"sub_page_{page-1}"))
+    if page < total_pages - 1:
+        nav.append(InlineKeyboardButton("▶️", callback_data=f"sub_page_{page+1}"))
+    if nav:
+        keyboard.append(nav)
+
     keyboard.append([InlineKeyboardButton("🔙 Главное меню", callback_data="menu")])
     return InlineKeyboardMarkup(keyboard)
 
@@ -475,4 +482,7 @@ async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 end_time = weathers[weather_type].get('endTime')
                 if end_time:
                     msg += f"⏱️ Длится до: {datetime.fromtimestamp(end_time).strftime('%H:%M:%S')} МСК\n"
-            msg += f"\n🕐 {get_msk_time().strftime('%H:%M:%S')} МСК\n\n 
+            msg += f"\n🕐 {get_msk_time().strftime('%H:%M:%S')} МСК\n\n🤖 Наш бот: @growagardenstock235_bot"
+            await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+        else:
+            await update.mess
