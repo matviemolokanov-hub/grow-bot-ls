@@ -21,7 +21,6 @@ DATA_FILE = os.path.join(DATA_DIR, "user_settings.json")
 GROUP_SETTINGS_FILE = os.path.join(DATA_DIR, "group_settings.json")
 ITEMS_CACHE_FILE = os.path.join(DATA_DIR, "items_cache.json")
 PREDICT_MESSAGES_FILE = os.path.join(DATA_DIR, "predict_messages.json")
-ADMIN_STATE_FILE = os.path.join(DATA_DIR, "admin_state.json")
 MULTIPLIERS_CACHE_FILE = os.path.join(DATA_DIR, "multipliers_cache.json")
 MULTIPLIER_MESSAGES_FILE = os.path.join(DATA_DIR, "multiplier_messages.json")
 
@@ -87,7 +86,6 @@ last_stock_data = None
 last_weather_data = None
 _items_cache_time = 0
 predict_messages = load_json(PREDICT_MESSAGES_FILE, {})
-admin_state = load_json(ADMIN_STATE_FILE, {})
 multipliers_cache = {}
 _multipliers_cache_time = 0
 multiplier_messages = load_json(MULTIPLIER_MESSAGES_FILE, {})
@@ -493,9 +491,9 @@ def get_admin_menu(chat_id):
 
 def get_admin_category_menu(action):
     keyboard = [
-        [InlineKeyboardButton("🌾 Семена", callback_data=f"admin_category_{action}_Семена")],
-        [InlineKeyboardButton("📦 Ящики", callback_data=f"admin_category_{action}_Ящики")],
-        [InlineKeyboardButton("⚙️ Снаряжение", callback_data=f"admin_category_{action}_Снаряжение")],
+        [InlineKeyboardButton("🌾 Семена", callback_data=f"admin_{action}_seed")],
+        [InlineKeyboardButton("📦 Ящики", callback_data=f"admin_{action}_crate")],
+        [InlineKeyboardButton("⚙️ Снаряжение", callback_data=f"admin_{action}_gear")],
         [InlineKeyboardButton("🔙 Назад", callback_data="admin_back")],
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -504,18 +502,23 @@ def get_admin_items_menu(chat_id, category, action, page=0):
     items_per_page = 10
     items = load_items()
     subscriptions = group_settings.get(str(chat_id), {}).get("subscriptions", [])
+
     items_list = [name for name, info in items.items() if info.get('category') == category]
     items_list.sort()
+
     total_pages = max(1, (len(items_list) + items_per_page - 1) // items_per_page)
     page = max(0, min(page, total_pages - 1))
+    
     start = page * items_per_page
     end = start + items_per_page
     current_items = items_list[start:end]
+
     keyboard = []
     for item_name in current_items:
         is_selected = item_name in subscriptions
         button_text = f"{'✅' if is_selected else '❌'} {item_name}"
-        keyboard.append([InlineKeyboardButton(button_text, callback_data=f"admin_item_{action}_{category}_{page}_{item_name}")])
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=f"admin_{action}_{category}_{page}_{item_name}")])
+
     nav_buttons = []
     if page > 0:
         nav_buttons.append(InlineKeyboardButton("◀️", callback_data=f"admin_page_{action}_{category}_{page-1}"))
@@ -523,6 +526,7 @@ def get_admin_items_menu(chat_id, category, action, page=0):
         nav_buttons.append(InlineKeyboardButton("▶️", callback_data=f"admin_page_{action}_{category}_{page+1}"))
     if nav_buttons:
         keyboard.append(nav_buttons)
+
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="admin_back_to_categories")])
     return InlineKeyboardMarkup(keyboard)
 
@@ -531,12 +535,15 @@ def get_admin_subscriptions_menu(chat_id, page=0):
     items_per_page = 10
     total_pages = max(1, (len(subscriptions) + items_per_page - 1) // items_per_page)
     page = max(0, min(page, total_pages - 1))
+    
     start = page * items_per_page
     end = start + items_per_page
     current_subs = subscriptions[start:end]
+
     keyboard = []
     for sub in current_subs:
         keyboard.append([InlineKeyboardButton(f"❌ {sub}", callback_data=f"admin_unsub_{sub}")])
+
     nav_buttons = []
     if page > 0:
         nav_buttons.append(InlineKeyboardButton("◀️", callback_data=f"admin_subs_page_{page-1}"))
@@ -544,6 +551,7 @@ def get_admin_subscriptions_menu(chat_id, page=0):
         nav_buttons.append(InlineKeyboardButton("▶️", callback_data=f"admin_subs_page_{page+1}"))
     if nav_buttons:
         keyboard.append(nav_buttons)
+
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="admin_back")])
     return InlineKeyboardMarkup(keyboard)
 
@@ -551,18 +559,23 @@ def get_items_menu(user_id, category, page=0):
     items_per_page = 10
     items = load_items()
     subscriptions = user_settings.get(str(user_id), {}).get("subscriptions", [])
+
     items_list = [name for name, info in items.items() if info.get('category') == category]
     items_list.sort()
+
     total_pages = max(1, (len(items_list) + items_per_page - 1) // items_per_page)
     page = max(0, min(page, total_pages - 1))
+    
     start = page * items_per_page
     end = start + items_per_page
     current_items = items_list[start:end]
+
     keyboard = []
     for item_name in current_items:
         is_selected = item_name in subscriptions
         button_text = f"{'✅' if is_selected else '❌'} {item_name}"
         keyboard.append([InlineKeyboardButton(button_text, callback_data=f"item_{category}_{page}_{item_name}")])
+
     nav_buttons = []
     if page > 0:
         nav_buttons.append(InlineKeyboardButton("◀️ Назад", callback_data=f"page_{category}_{page-1}"))
@@ -570,6 +583,7 @@ def get_items_menu(user_id, category, page=0):
         nav_buttons.append(InlineKeyboardButton("Вперёд ▶️", callback_data=f"page_{category}_{page+1}"))
     if nav_buttons:
         keyboard.append(nav_buttons)
+
     keyboard.append([InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_menu")])
     return InlineKeyboardMarkup(keyboard)
 
@@ -578,12 +592,15 @@ def get_subscriptions_menu(user_id, page=0):
     items_per_page = 10
     total_pages = max(1, (len(subscriptions) + items_per_page - 1) // items_per_page)
     page = max(0, min(page, total_pages - 1))
+    
     start = page * items_per_page
     end = start + items_per_page
     current_subs = subscriptions[start:end]
+
     keyboard = []
     for sub in current_subs:
         keyboard.append([InlineKeyboardButton(f"❌ {sub}", callback_data=f"unsub_{sub}")])
+
     nav_buttons = []
     if page > 0:
         nav_buttons.append(InlineKeyboardButton("◀️", callback_data=f"sub_page_{page-1}"))
@@ -591,6 +608,7 @@ def get_subscriptions_menu(user_id, page=0):
         nav_buttons.append(InlineKeyboardButton("▶️", callback_data=f"sub_page_{page+1}"))
     if nav_buttons:
         keyboard.append(nav_buttons)
+
     keyboard.append([InlineKeyboardButton("🔙 Главное меню", callback_data="back_to_menu")])
     return InlineKeyboardMarkup(keyboard)
 
@@ -603,152 +621,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = query.message.chat_id
         data = query.data
 
-        # ✅ ЛОГИРУЕМ ВСЕ КНОПКИ
-        logger.info(f"🔘 НАЖАТА КНОПКА: {data} от {user_id} в чате {chat_id}")
+        logger.info(f"🔘 НАЖАТА КНОПКА: {data} от {user_id}")
 
-        # Всегда отвечаем на callback
+        if data == "ignore":
+            await query.answer()
+            return
+
         await query.answer()
 
-        # Проверяем права админа для admin-кнопок
-        if data.startswith("admin_") and int(user_id) not in ADMIN_IDS:
-            await query.edit_message_text("❌ Нет прав!")
-            return
-
-        # === АДМИН-КНОПКИ ===
-        if data == "admin_view_subs":
-            logger.info("📋 Открываем подписки группы")
-            subscriptions = group_settings.get(str(chat_id), {}).get("subscriptions", [])
-            if not subscriptions:
-                await query.edit_message_text("📋 <b>Нет подписок</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_menu(chat_id))
-            else:
-                await query.edit_message_text("📋 <b>Подписки группы</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_subscriptions_menu(chat_id))
-            return
-
-        elif data == "admin_add_items":
-            logger.info("➕ Открываем добавление предметов")
-            admin_state[str(chat_id)] = "add"
-            save_json(ADMIN_STATE_FILE, admin_state)
-            await query.edit_message_text("📂 <b>Выбери категорию:</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_category_menu('add'))
-            return
-
-        elif data == "admin_remove_items":
-            logger.info("➖ Открываем удаление предметов")
-            admin_state[str(chat_id)] = "remove"
-            save_json(ADMIN_STATE_FILE, admin_state)
-            await query.edit_message_text("📂 <b>Выбери категорию:</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_category_menu('remove'))
-            return
-
-        elif data == "admin_toggle_weather":
-            logger.info("🌤️ Переключаем погоду")
-            settings = group_settings.get(str(chat_id), {"subscriptions": [], "weather": False})
-            settings["weather"] = not settings.get("weather", False)
-            group_settings[str(chat_id)] = settings
-            save_json(GROUP_SETTINGS_FILE, group_settings)
-            status = "включена" if settings["weather"] else "выключена"
-            await query.answer(f"🌤️ Погода {status}")
-            await query.edit_message_reply_markup(reply_markup=get_admin_menu(chat_id))
-            return
-
-        elif data == "admin_clear_all":
-            logger.info("🗑️ Очищаем все подписки")
-            group_settings[str(chat_id)] = {"subscriptions": [], "weather": group_settings.get(str(chat_id), {}).get("weather", False)}
-            save_json(GROUP_SETTINGS_FILE, group_settings)
-            await query.answer("🗑️ Все подписки очищены")
-            await query.edit_message_text("👑 <b>Админ-панель</b>\n\nВсе подписки очищены!", parse_mode=ParseMode.HTML, reply_markup=get_admin_menu(chat_id))
-            return
-
-        elif data == "admin_close":
-            logger.info("🔙 Закрываем админ-панель")
-            await query.edit_message_text("👑 Админ-панель закрыта", reply_markup=None)
-            admin_state[str(chat_id)] = None
-            save_json(ADMIN_STATE_FILE, admin_state)
-            return
-
-        elif data == "admin_back":
-            logger.info("🔙 Возврат в админ-панель")
-            admin_state[str(chat_id)] = None
-            save_json(ADMIN_STATE_FILE, admin_state)
-            await query.edit_message_text("👑 <b>Админ-панель</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_menu(chat_id))
-            return
-
-        elif data == "admin_back_to_categories":
-            logger.info("🔙 Возврат к выбору категории")
-            action = admin_state.get(str(chat_id), "add")
-            await query.edit_message_text("📂 <b>Выбери категорию:</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_category_menu(action))
-            return
-
-        elif data.startswith("admin_category_"):
-            parts = data.split("_")
-            action = parts[2]
-            category = parts[3]
-            logger.info(f"📂 Выбрана категория: {category} (action: {action})")
-            admin_state[str(chat_id)] = action
-            save_json(ADMIN_STATE_FILE, admin_state)
-            await query.edit_message_text(f"📂 <b>{category}</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_items_menu(chat_id, category, action, 0))
-            return
-
-        elif data.startswith("admin_item_"):
-            parts = data.split("_")
-            action = parts[2]
-            category = parts[3]
-            page = int(parts[4])
-            item_name = "_".join(parts[5:])
-            logger.info(f"📦 Нажат предмет: {item_name} (action: {action})")
-            
-            settings = group_settings.get(str(chat_id), {"subscriptions": [], "weather": False})
-            subscriptions = settings.get("subscriptions", [])
-            
-            if action == "add":
-                if item_name not in subscriptions:
-                    subscriptions.append(item_name)
-                    await query.answer(f"✅ {item_name} добавлен")
-                else:
-                    await query.answer(f"ℹ️ {item_name} уже в списке")
-            else:
-                if item_name in subscriptions:
-                    subscriptions.remove(item_name)
-                    await query.answer(f"❌ {item_name} удалён")
-                else:
-                    await query.answer(f"ℹ️ {item_name} не в списке")
-            
-            settings["subscriptions"] = subscriptions
-            group_settings[str(chat_id)] = settings
-            save_json(GROUP_SETTINGS_FILE, group_settings)
-            await query.edit_message_reply_markup(reply_markup=get_admin_items_menu(chat_id, category, action, page))
-            return
-
-        elif data.startswith("admin_page_"):
-            parts = data.split("_")
-            action = parts[2]
-            category = parts[3]
-            page = int(parts[4])
-            logger.info(f"📄 Пагинация: {action} {category} стр.{page}")
-            await query.edit_message_reply_markup(reply_markup=get_admin_items_menu(chat_id, category, action, page))
-            return
-
-        elif data.startswith("admin_subs_page_"):
-            page = int(data.split("_")[3])
-            logger.info(f"📄 Пагинация подписок: стр.{page}")
-            await query.edit_message_reply_markup(reply_markup=get_admin_subscriptions_menu(chat_id, page))
-            return
-
-        elif data.startswith("admin_unsub_"):
-            item_name = data.replace("admin_unsub_", "")
-            logger.info(f"❌ Удаляем подписку: {item_name}")
-            settings = group_settings.get(str(chat_id), {"subscriptions": [], "weather": False})
-            settings["subscriptions"] = [s for s in settings.get("subscriptions", []) if s != item_name]
-            group_settings[str(chat_id)] = settings
-            save_json(GROUP_SETTINGS_FILE, group_settings)
-            await query.answer(f"❌ {item_name} удалён")
-            
-            if settings["subscriptions"]:
-                await query.edit_message_text("📋 <b>Подписки группы</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_subscriptions_menu(chat_id))
-            else:
-                await query.edit_message_text("👑 <b>Админ-панель</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_menu(chat_id))
-            return
+        if user_id not in user_settings:
+            user_settings[user_id] = {"subscriptions": []}
+            save_json(DATA_FILE, user_settings)
 
         # === ОБЫЧНЫЕ КНОПКИ ===
-        elif data == "back_to_menu":
+        if data == "back_to_menu":
             items = load_items()
             await query.edit_message_text(
                 "🌱 <b>Grow a Garden 2 Tracker</b>\n\n"
@@ -833,8 +719,124 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_reply_markup(reply_markup=get_items_menu(user_id, category, page))
             return
 
-        else:
-            logger.warning(f"⚠️ Неизвестный callback: {data}")
+        # === АДМИН-КНОПКИ ===
+        elif data.startswith("admin_"):
+            if int(user_id) not in ADMIN_IDS:
+                await query.edit_message_text("❌ Нет прав!")
+                return
+            
+            if data == "admin_close":
+                await query.edit_message_text("👑 Админ-панель закрыта", reply_markup=None)
+                return
+            
+            elif data == "admin_back":
+                await query.edit_message_text("👑 <b>Админ-панель</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_menu(chat_id))
+                return
+            
+            elif data == "admin_back_to_categories":
+                await query.edit_message_text("📂 <b>Выбери категорию:</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_category_menu(context.user_data.get('admin_action', 'add')))
+                return
+            
+            elif data == "admin_view_subs":
+                subscriptions = group_settings.get(str(chat_id), {}).get("subscriptions", [])
+                if not subscriptions:
+                    await query.edit_message_text("📋 <b>Нет подписок</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_menu(chat_id))
+                else:
+                    await query.edit_message_text("📋 <b>Подписки группы</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_subscriptions_menu(chat_id))
+                return
+            
+            elif data == "admin_toggle_weather":
+                settings = group_settings.get(str(chat_id), {"subscriptions": [], "weather": False})
+                settings["weather"] = not settings.get("weather", False)
+                group_settings[str(chat_id)] = settings
+                save_json(GROUP_SETTINGS_FILE, group_settings)
+                status = "включена" if settings["weather"] else "выключена"
+                await query.answer(f"🌤️ Погода {status}")
+                await query.edit_message_reply_markup(reply_markup=get_admin_menu(chat_id))
+                return
+            
+            elif data == "admin_add_items":
+                context.user_data['admin_action'] = 'add'
+                await query.edit_message_text("📂 <b>Выбери категорию:</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_category_menu('add'))
+                return
+            
+            elif data == "admin_remove_items":
+                context.user_data['admin_action'] = 'remove'
+                await query.edit_message_text("📂 <b>Выбери категорию:</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_category_menu('remove'))
+                return
+            
+            elif data == "admin_clear_all":
+                group_settings[str(chat_id)] = {"subscriptions": [], "weather": group_settings.get(str(chat_id), {}).get("weather", False)}
+                save_json(GROUP_SETTINGS_FILE, group_settings)
+                await query.answer("🗑️ Все подписки очищены")
+                await query.edit_message_text("👑 <b>Админ-панель</b>\n\nВсе подписки очищены!", parse_mode=ParseMode.HTML, reply_markup=get_admin_menu(chat_id))
+                return
+            
+            elif data.startswith("admin_add_") or data.startswith("admin_remove_"):
+                parts = data.split("_")
+                action = parts[1]
+                category = parts[2] if len(parts) > 2 else ""
+                
+                if len(parts) == 3:
+                    category_name = {"seed": "Семена", "crate": "Ящики", "gear": "Снаряжение"}.get(category, category)
+                    await query.edit_message_text(f"📂 <b>{category_name}</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_items_menu(chat_id, category_name, action, 0))
+                    return
+                
+                elif len(parts) >= 5:
+                    category = parts[2]
+                    page = int(parts[3])
+                    item_name = "_".join(parts[4:])
+                    
+                    settings = group_settings.get(str(chat_id), {"subscriptions": [], "weather": False})
+                    subscriptions = settings.get("subscriptions", [])
+                    
+                    if action == "add":
+                        if item_name not in subscriptions:
+                            subscriptions.append(item_name)
+                            await query.answer(f"✅ {item_name} добавлен")
+                        else:
+                            await query.answer(f"ℹ️ {item_name} уже в списке")
+                    else:
+                        if item_name in subscriptions:
+                            subscriptions.remove(item_name)
+                            await query.answer(f"❌ {item_name} удалён")
+                        else:
+                            await query.answer(f"ℹ️ {item_name} не в списке")
+                    
+                    settings["subscriptions"] = subscriptions
+                    group_settings[str(chat_id)] = settings
+                    save_json(GROUP_SETTINGS_FILE, group_settings)
+                    await query.edit_message_reply_markup(reply_markup=get_admin_items_menu(chat_id, category, action, page))
+                    return
+            
+            elif data.startswith("admin_page_"):
+                parts = data.split("_")
+                action = parts[2]
+                category = parts[3]
+                page = int(parts[4])
+                await query.edit_message_reply_markup(reply_markup=get_admin_items_menu(chat_id, category, action, page))
+                return
+            
+            elif data.startswith("admin_subs_page_"):
+                page = int(data.split("_")[3])
+                await query.edit_message_reply_markup(reply_markup=get_admin_subscriptions_menu(chat_id, page))
+                return
+            
+            elif data.startswith("admin_unsub_"):
+                item_name = data.replace("admin_unsub_", "")
+                settings = group_settings.get(str(chat_id), {"subscriptions": [], "weather": False})
+                settings["subscriptions"] = [s for s in settings.get("subscriptions", []) if s != item_name]
+                group_settings[str(chat_id)] = settings
+                save_json(GROUP_SETTINGS_FILE, group_settings)
+                await query.answer(f"❌ {item_name} удалён")
+                
+                if settings["subscriptions"]:
+                    await query.edit_message_text("📋 <b>Подписки группы</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_subscriptions_menu(chat_id))
+                else:
+                    await query.edit_message_text("👑 <b>Админ-панель</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_menu(chat_id))
+                return
+            
+            logger.warning(f"⚠️ Неизвестный admin callback: {data}")
 
     except Exception as e:
         logger.error(f"❌ Ошибка в button_handler: {e}")
@@ -988,11 +990,10 @@ def main():
         logger.error("Токен не найден!")
         return
 
-    global user_settings, group_settings, predict_messages, admin_state, multiplier_messages
+    global user_settings, group_settings, predict_messages, multiplier_messages
     user_settings = load_json(DATA_FILE, {})
     group_settings = load_json(GROUP_SETTINGS_FILE, {})
     predict_messages = load_json(PREDICT_MESSAGES_FILE, {})
-    admin_state = load_json(ADMIN_STATE_FILE, {})
     multiplier_messages = load_json(MULTIPLIER_MESSAGES_FILE, {})
     
     load_items()
@@ -1000,17 +1001,13 @@ def main():
 
     app = Application.builder().token(TOKEN).build()
     
-    # Регистрируем команды
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CommandHandler("weather", weather_command))
     app.add_handler(CommandHandler("predict", predict_command))
     app.add_handler(CommandHandler("multipliers", multipliers_command))
-    
-    # Регистрируем обработчик кнопок - ВАЖНО!
     app.add_handler(CallbackQueryHandler(button_handler))
     
-    # Задачи
     app.job_queue.run_repeating(check_and_notify, interval=10, first=5)
     app.job_queue.run_repeating(update_predictions_job, interval=30, first=10)
 
