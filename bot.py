@@ -13,9 +13,13 @@ from telegram.error import BadRequest
 
 # ================= НАСТРОЙКИ =================
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+if not TOKEN:
+    raise ValueError("❌ TELEGRAM_BOT_TOKEN не задан!")
+
 API_URL = "https://grow-a-garden-2-tracker.onrender.com/api/stock"
 PREDICT_URL = "https://grow-a-garden-2-tracker.onrender.com/api/predictions"
 
+# Путь для сохранения данных (Railway /app/data)
 DATA_DIR = "/app/data" if os.path.exists("/app") else "."
 os.makedirs(DATA_DIR, exist_ok=True)
 
@@ -23,13 +27,23 @@ DATA_FILE = os.path.join(DATA_DIR, "user_settings.json")
 GROUP_SETTINGS_FILE = os.path.join(DATA_DIR, "group_settings.json")
 ITEMS_CACHE_FILE = os.path.join(DATA_DIR, "items_cache.json")
 PREDICT_MESSAGES_FILE = os.path.join(DATA_DIR, "predict_messages.json")
-MULTIPLIERS_CACHE_FILE = os.path.join(DATA_DIR, "multipliers_cache.json")
 MULTIPLIER_MESSAGES_FILE = os.path.join(DATA_DIR, "multiplier_messages.json")
 
 CACHE_TTL = 300
-ADMIN_IDS = [7632708290]
+ADMIN_IDS = [7632708290]  # ID админов
 
-# ================= ВСЕ ТИПЫ ПОГОДЫ =================
+# ================= НАСТРОЙКА ЛОГГИРОВАНИЯ =================
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO,
+    handlers=[
+        logging.FileHandler(os.path.join(DATA_DIR, 'bot.log'), encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# ================= ТИПЫ ПОГОДЫ =================
 WEATHER_TYPES = {
     "Clear": {"emoji": "☀️", "name": "Обычная"},
     "Rain": {"emoji": "🌧️", "name": "Дождь"},
@@ -45,13 +59,6 @@ WEATHER_TYPES = {
     "Fog": {"emoji": "🌫️", "name": "Туман"},
     "Wind": {"emoji": "💨", "name": "Ветер"},
 }
-
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO,
-    handlers=[logging.FileHandler(os.path.join(DATA_DIR, 'bot.log'), encoding='utf-8'), logging.StreamHandler()]
-)
-logger = logging.getLogger(__name__)
 
 # ================= ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =================
 def get_msk_time():
@@ -94,7 +101,7 @@ async def safe_edit(query, text=None, reply_markup=None):
     except Exception as e:
         logger.error(f"Критическая ошибка safe_edit: {e}")
 
-# ================= ДАННЫЕ И КЕШ =================
+# ================= ЗАГРУЗКА ДАННЫХ =================
 user_settings = load_json(DATA_FILE, {})
 group_settings = load_json(GROUP_SETTINGS_FILE, {})
 predict_messages = load_json(PREDICT_MESSAGES_FILE, {})
@@ -135,7 +142,7 @@ def load_items():
             save_json(ITEMS_CACHE_FILE, {'items': all_items, 'timestamp': _items_cache_time})
             logger.info(f"Загружено предметов: {len(all_items)}")
     except Exception as e:
-        logger.error(f"Ошибка API: {e}")
+        logger.error(f"Ошибка загрузки предметов: {e}")
     return all_items
 
 def get_multipliers():
@@ -145,8 +152,8 @@ def get_multipliers():
             mults = resp.json().get('fruitMultipliers', [])
             mults.sort(key=lambda x: x.get('multiplier', 0), reverse=True)
             return mults
-    except:
-        pass
+    except Exception as e:
+        logger.error(f"Ошибка получения мультипликаторов: {e}")
     return []
 
 def get_predictions_data():
@@ -289,7 +296,7 @@ def format_full_stock_message(data):
 def get_weather_type(data):
     weather = data.get('weather', {})
     weathers = weather.get('weathers', {})
-    for key in WEATHER_TYPES.keys():
+    for key in WEATHER_TYPES:
         if key == "Clear":
             continue
         val = weathers.get(key)
@@ -316,17 +323,10 @@ def get_changes(old, new):
     return added, removed, changed
 
 def format_stock_update_message(added, changed, removed):
-    """
-    Форматирует единое сообщение об обновлении стока.
-    added: dict {name: stock}
-    changed: dict {name: {'old': old_stock, 'new': new_stock}}
-    removed: список имён удалённых предметов
-    """
     msk_time = get_msk_time()
     cat_emojis = {"Семена": "🌾", "Ящики": "📦", "Снаряжение": "⚙️"}
     categories = {}
 
-    # Собираем все изменения по категориям
     for name, stock in added.items():
         info = all_items.get(name, {})
         cat = info.get('category', 'Неизвестно')
@@ -452,6 +452,7 @@ def get_subscriptions_menu(user_id, page=0):
 # ================= КОМАНДЫ =================
 async def predict_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
+    logger.info(f"🔮 /predict от {chat_id}")
     data = get_predictions_data()
     if not data:
         await update.message.reply_text("❌ Не удалось получить данные предсказаний")
@@ -462,9 +463,10 @@ async def predict_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_json(PREDICT_MESSAGES_FILE, predict_messages)
 
 async def multipliers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    logger.info(f"📊 /multipliers от {chat_id}")
     msg = format_multipliers_message()
     sent = await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
-    chat_id = str(update.effective_chat.id)
     multiplier_messages[chat_id] = sent.message_id
     save_json(MULTIPLIER_MESSAGES_FILE, multiplier_messages)
 
@@ -483,6 +485,4 @@ async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if end_time:
                     msg += f"⏱️ Длится до: {datetime.fromtimestamp(end_time).strftime('%H:%M:%S')} МСК\n"
             msg += f"\n🕐 {get_msk_time().strftime('%H:%M:%S')} МСК\n\n🤖 Наш бот: @growagardenstock235_bot"
-            await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
-        else:
-            await update.message.reply
+            await update.message.reply_text(msg, parse_mode=ParseMode.
