@@ -185,7 +185,7 @@ def format_predict_msg(data):
 
     all_items_p = data.get('seeds', []) + data.get('gears', []) + data.get('props', [])
     
-    # В наличии сейчас (relativeText содержит "*Currently on Stock*")
+    # В наличии сейчас
     stock_now = [i for i in all_items_p if i.get('relativeText') == "*Currently on Stock*" and i.get('name') in important_names]
     
     # Будущие появления
@@ -193,6 +193,13 @@ def format_predict_msg(data):
         [i for i in all_items_p if i.get('name') in important_names and i.get('timestamp', 0) > now],
         key=lambda x: x['timestamp']
     )[:8]
+    
+    # Прошлые появления
+    past_stock = sorted(
+        [i for i in all_items_p if i.get('name') in important_names and i.get('timestamp', 0) < now and i.get('relativeText') != "*Currently on Stock*"],
+        key=lambda x: x['timestamp'],
+        reverse=True
+    )[:5]
 
     # === ФОРМИРУЕМ СООБЩЕНИЕ ===
     msg = "🔮 <b>ПРЕДСКАЗАНИЯ</b>\n"
@@ -206,7 +213,12 @@ def format_predict_msg(data):
             name = w.get('name', 'Неизвестно')
             ts = w.get('timestamp', 0)
             info = WEATHER_TYPES.get(name, {"emoji": "🌙", "name": name})
-            msg += f"  {info['emoji']} {info['name']} — {format_timestamp(ts)}\n"
+            time_str = format_timestamp(ts)
+            minutes_left = int((ts - now) / 60)
+            if minutes_left > 0:
+                msg += f"  {info['emoji']} {info['name']} — {time_str} (через {minutes_left} мин.)\n"
+            else:
+                msg += f"  {info['emoji']} {info['name']} — {time_str}\n"
         msg += "\n"
 
     # Редкий сток
@@ -228,9 +240,23 @@ def format_predict_msg(data):
         for i in upcoming_stock:
             name = i.get('name', 'Неизвестно')
             ts = i.get('timestamp', 0)
-            msg += f"    • {name} — {format_timestamp(ts)}\n"
+            time_str = format_timestamp(ts)
+            minutes_left = int((ts - now) / 60)
+            if minutes_left > 0:
+                msg += f"    • {name} — {time_str} (через {minutes_left} мин.)\n"
+            else:
+                msg += f"    • {name} — {time_str}\n"
     else:
         msg += "  ⏳ Редких предметов в ближайшее время не ожидается.\n"
+
+    # Прошлые появления
+    if past_stock:
+        msg += "\n  🕐 <b>БЫЛИ В СТОКЕ:</b>\n"
+        for i in past_stock:
+            name = i.get('name', 'Неизвестно')
+            ts = i.get('timestamp', 0)
+            time_str = format_timestamp(ts)
+            msg += f"    • {name} — {time_str}\n"
 
     msg += "\n" + "═" * 30 + "\n"
     msg += "🤖 Наш бот: @growagardenstock235_bot"
