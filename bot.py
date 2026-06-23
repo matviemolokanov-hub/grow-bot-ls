@@ -82,7 +82,7 @@ def save_json(filename, data):
         logger.error(f"Ошибка сохранения {filename}: {e}")
         return False
 
-# Безопасное изменение сообщений для устранения зависания
+# Безопасное изменение сообщений
 async def safe_edit(query, text=None, reply_markup=None):
     try:
         if text is not None:
@@ -643,7 +643,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer()
             return
 
-        # Сразу отправляем ответ серверу Telegram, чтобы кнопка мгновенно разлагала
         await query.answer()
 
         if user_id not in user_settings:
@@ -675,7 +674,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data == "show_multipliers":
             msg = format_multipliers_message()
             await safe_edit(query, text=msg, reply_markup=get_main_menu())
-            # Сохраняем сообщение
             multiplier_messages[str(chat_id)] = query.message.message_id
             save_json(MULTIPLIER_MESSAGES_FILE, multiplier_messages)
             return
