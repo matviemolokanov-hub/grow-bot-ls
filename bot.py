@@ -198,10 +198,16 @@ def format_predict_msg(data):
 
     all_items_p = data.get('seeds', []) + data.get('gears', []) + data.get('props', [])
     
+    # Логируем все предметы для отладки
+    logger.info(f"Всего предметов в предсказаниях: {len(all_items_p)}")
+    for item in all_items_p:
+        if item.get('name') in important_names:
+            logger.info(f"Найден предмет: {item.get('name')}, timestamp: {item.get('timestamp')}, relativeText: {item.get('relativeText')}")
+    
     # В наличии сейчас
     stock_now = [i for i in all_items_p if i.get('relativeText') == "*Currently on Stock*" and i.get('name') in important_names]
     
-    # Будущие появления
+    # Будущие появления (все предметы, у которых timestamp больше now)
     upcoming_stock = sorted(
         [i for i in all_items_p if i.get('name') in important_names and i.get('timestamp', 0) > now],
         key=lambda x: x['timestamp']
@@ -619,6 +625,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         return
 
+    # Обязательно отвечаем на callback, чтобы кнопка перестала быть "загруженной"
     await query.answer()
 
     if user_id not in user_settings:
