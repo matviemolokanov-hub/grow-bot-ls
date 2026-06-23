@@ -449,8 +449,7 @@ def get_subscriptions_menu(user_id, page=0):
     return InlineKeyboardMarkup(keyboard)
 
 # ================= КОНЕЦ ПЕРВОЙ ЧАСТИ =================
-# ВСЁ, ЧТО ВЫШЕ – ВСТАВЛЯЙ В bot.py С 1-Й СТРОКИ
-# ================= НАЧАЛО ВТОРОЙ ЧАСТИ (КОМАНДЫ) =================
+    # ================= НАЧАЛО ВТОРОЙ ЧАСТИ (КОМАНДЫ) =================
 
 async def predict_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
@@ -680,7 +679,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
 
-# ================= ФОНОВЫЕ ЗАДАЧИ =================
+# ================= ФОНОВЫЕ ЗАДАЧИ (ИСПРАВЛЕННЫЕ) =================
 async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
     global last_stock_data, last_weather_data
     try:
@@ -706,44 +705,65 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
 
         # ---- Сток ----
         new_stock = get_stock_signature(data)
-        if last_stock_data is not None:
-            added, removed, changed = get_changes(last_stock_data, new_stock)
-            if added or removed or changed:
-                # Группы
-                for cid, s in group_settings.items():
-                    subs = s.get("subscriptions", [])
-                    if not subs:
-                        continue
-                    g_added = {n: s_val for n, s_val in added.items() if n in subs}
-                    g_changed = {n: c for n, c in changed.items() if n in subs}
-                    g_removed = {n for n in removed if n in subs}
-                    if g_added or g_changed or g_removed:
-                        msg = format_stock_update_message(g_added, g_changed, g_removed)
-                        if msg:
-                            try:
-                                await context.bot.send_message(chat_id=int(cid), text=msg, parse_mode=ParseMode.HTML)
-                                logger.info(f"📢 Сток отправлен в группу {cid}")
-                            except Exception as e:
-                                logger.error(f"Ошибка отправки стока в {cid}: {e}")
-                # Пользователи (ЛС)
-                for uid, s in user_settings.items():
-                    subs = s.get("subscriptions", [])
-                    if not subs:
-                        continue
-                    u_added = {n: s_val for n, s_val in added.items() if n in subs}
-                    u_changed = {n: c for n, c in changed.items() if n in subs}
-                    u_removed = {n for n in removed if n in subs}
-                    if u_added or u_changed or u_removed:
-                        msg = format_stock_update_message(u_added, u_changed, u_removed)
-                        if msg:
-                            try:
-                                await context.bot.send_message(chat_id=int(uid), text=msg, parse_mode=ParseMode.HTML)
-                                logger.info(f"📢 Сток отправлен пользователю {uid}")
-                            except Exception as e:
-                                logger.error(f"Ошибка отправки стока пользователю {uid}: {e}")
+        logger.info(f"📊 Новый сток: {len(new_stock)} позиций")
+
+        if last_stock_data is None:
+            # Первый запуск – просто запоминаем
+            last_stock_data = new_stock
+            logger.info("🔄 Первый запуск, сток запомнен")
+            return
+
+        added, removed, changed = get_changes(last_stock_data, new_stock)
+        logger.info(f"📈 Изменения: +{len(added)} -{len(removed)} *{len(changed)}")
+
+        if added or removed or changed:
+            logger.info("🔔 Есть изменения, готовим уведомления")
+
+            # --- Группы ---
+            for cid, s in group_settings.items():
+                subs = s.get("subscriptions", [])
+                if not subs:
+                    continue
+                g_added = {n: s_val for n, s_val in added.items() if n in subs}
+                g_changed = {n: c for n, c in changed.items() if n in subs}
+                g_removed = {n for n in removed if n in subs}
+                if g_added or g_changed or g_removed:
+                    msg = format_stock_update_message(g_added, g_changed, g_removed)
+                    if msg:
+                        try:
+                            await context.bot.send_message(chat_id=int(cid), text=msg, parse_mode=ParseMode.HTML)
+                            logger.info(f"📢 Сток отправлен в группу {cid} (изменений: {len(g_added)+len(g_changed)+len(g_removed)})")
+                        except Exception as e:
+                            logger.error(f"Ошибка отправки стока в {cid}: {e}")
+                    else:
+                        logger.warning(f"⚠️ format_stock_update_message вернул None для группы {cid}")
+
+            # --- Пользователи (ЛС) ---
+            for uid, s in user_settings.items():
+                subs = s.get("subscriptions", [])
+                if not subs:
+                    continue
+                u_added = {n: s_val for n, s_val in added.items() if n in subs}
+                u_changed = {n: c for n, c in changed.items() if n in subs}
+                u_removed = {n for n in removed if n in subs}
+                if u_added or u_changed or u_removed:
+                    msg = format_stock_update_message(u_added, u_changed, u_removed)
+                    if msg:
+                        try:
+                            await context.bot.send_message(chat_id=int(uid), text=msg, parse_mode=ParseMode.HTML)
+                            logger.info(f"📢 Сток отправлен пользователю {uid} (изменений: {len(u_added)+len(u_changed)+len(u_removed)})")
+                        except Exception as e:
+                            logger.error(f"Ошибка отправки стока пользователю {uid}: {e}")
+                    else:
+                        logger.warning(f"⚠️ format_stock_update_message вернул None для пользователя {uid}")
+
+        else:
+            logger.info("✅ Изменений стока нет")
+
         last_stock_data = new_stock
+
     except Exception as e:
-        logger.error(f"Ошибка check_and_notify: {e}")
+        logger.error(f"Ошибка в check_and_notify: {e}")
         traceback.print_exc()
 
 async def update_predictions_job(context: ContextTypes.DEFAULT_TYPE):
