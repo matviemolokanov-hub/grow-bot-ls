@@ -7,6 +7,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 from telegram.constants import ParseMode
 import os
 import time
+import traceback
 
 # ================= НАСТРОЙКИ =================
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -22,6 +23,7 @@ GROUP_SETTINGS_FILE = os.path.join(DATA_DIR, "group_settings.json")
 ITEMS_CACHE_FILE = os.path.join(DATA_DIR, "items_cache.json")
 PREDICT_MESSAGES_FILE = os.path.join(DATA_DIR, "predict_messages.json")
 ADMIN_STATE_FILE = os.path.join(DATA_DIR, "admin_state.json")
+MULTIPLIERS_CACHE_FILE = os.path.join(DATA_DIR, "multipliers_cache.json")
 
 CACHE_TTL = 300
 
@@ -94,6 +96,13 @@ _items_cache_time = 0
 predict_messages = load_json(PREDICT_MESSAGES_FILE, {})
 admin_state = load_json(ADMIN_STATE_FILE, {})
 
+# Кеш для мультипликаторов
+multipliers_cache = {}
+_multipliers_cache_time = 0
+# Храним ID сообщения мультипликаторов для автообновления
+multiplier_messages = {}  # {chat_id: message_id}
+MULTIPLIER_MESSAGES_FILE = os.path.join(DATA_DIR, "multiplier_messages.json")
+
 # ================= КЕШИРОВАНИЕ =================
 def get_all_items_from_api(data):
     items = {}
@@ -132,6 +141,38 @@ def load_items():
         logger.error(f"Ошибка загрузки: {e}")
 
     return all_items
+
+def get_multipliers():
+    """Получает мультипликаторы из API"""
+    global multipliers_cache, _multipliers_cache_time
+    
+    if time.time() - _multipliers_cache_time < CACHE_TTL and multipliers_cache:
+        return multipliers_cache
+    
+    try:
+        resp = requests.get(API_URL, timeout=15)
+        if resp.status_code == 200:
+            data = resp.json()
+            multipliers = data.get('fruitMultipliers', [])
+            multipliers.sort(key=lambda x: x.get('multiplier', 0), reverse=True)
+            multipliers_cache = multipliers
+            _multipliers_cache_time = time.time()
+            # Сохраняем в файл
+            save_json(MULTIPLIERS_CACHE_FILE, {
+                'multipliers': multipliers,
+                'timestamp': _multipliers_cache_time
+            })
+            logger.info(f"Мультипликаторы обновлены, найдено: {len(multipliers)}")
+            return multipliers
+    except Exception as e:
+        logger.error(f"Ошибка получения мультипликаторов: {e}")
+        # Пробуем загрузить из файла
+        cached = load_json(MULTIPLIERS_CACHE_FILE)
+        if cached.get('multipliers'):
+            multipliers_cache = cached['multipliers']
+            _multipliers_cache_time = cached.get('timestamp', 0)
+            return multipliers_cache
+    return []
 
 def get_stock_signature(data):
     signature = {}
@@ -190,42 +231,48 @@ def format_predict_msg(data):
         key=lambda x: x['timestamp']
     )[:10]
 
-    # === РЕДКИЙ СТОК (только указанные предметы) ===
-    important_names = [
+    # === РЕДКИЙ СТОК (все редкие предметы, которые могут быть) ===
+    all_rare_items = [
         "Dragon's Breath", "Moon Bloom", "Venom Spitter", "Sunflower",
-        "Legendary Sprinkler", "Super Sprinkler", "Super Watering Can"
+        "Legendary Sprinkler", "Super Sprinkler", "Super Watering Can",
+        "Venus Fly Trap", "Poison Apple", "Pomegranate", "Acorn",
+        "Dragon Fruit", "Mango", "Cherry", "Grappling Hook",
+        "Player Magnet", "Strawberry Sniper", "Flashbang"
     ]
+    
+    try:
+        resp = requests.get(API_URL, timeout=10)
+        if resp.status_code == 200:
+            shop_data = resp.json()
+            for shop_type in ["SeedShop_Normal", "CrateShop", "GearShop"]:
+                for item in shop_data.get("shops", {}).get(shop_type, []):
+                    rarity = item.get('rarity', 'Common')
+                    if rarity in ['Rare', 'Epic', 'Legendary', 'Mythic', 'Super']:
+                        name = item.get('name')
+                        if name and name not in all_rare_items:
+                            all_rare_items.append(name)
+    except:
+        pass
 
     all_items_p = data.get('seeds', []) + data.get('gears', []) + data.get('props', [])
     
-    # Логируем все предметы для отладки
-    logger.info(f"Всего предметов в предсказаниях: {len(all_items_p)}")
-    for item in all_items_p:
-        if item.get('name') in important_names:
-            logger.info(f"Найден предмет: {item.get('name')}, timestamp: {item.get('timestamp')}, relativeText: {item.get('relativeText')}")
+    stock_now = [i for i in all_items_p if i.get('relativeText') == "*Currently on Stock*" and i.get('name') in all_rare_items]
     
-    # В наличии сейчас
-    stock_now = [i for i in all_items_p if i.get('relativeText') == "*Currently on Stock*" and i.get('name') in important_names]
-    
-    # Будущие появления (все предметы, у которых timestamp больше now)
     upcoming_stock = sorted(
-        [i for i in all_items_p if i.get('name') in important_names and i.get('timestamp', 0) > now],
+        [i for i in all_items_p if i.get('name') in all_rare_items and i.get('timestamp', 0) > now],
         key=lambda x: x['timestamp']
-    )[:8]
+    )[:15]
     
-    # Прошлые появления
     past_stock = sorted(
-        [i for i in all_items_p if i.get('name') in important_names and i.get('timestamp', 0) < now and i.get('relativeText') != "*Currently on Stock*"],
+        [i for i in all_items_p if i.get('name') in all_rare_items and i.get('timestamp', 0) < now and i.get('relativeText') != "*Currently on Stock*"],
         key=lambda x: x['timestamp'],
         reverse=True
-    )[:5]
+    )[:10]
 
-    # === ФОРМИРУЕМ СООБЩЕНИЕ ===
     msg = "🔮 <b>ПРЕДСКАЗАНИЯ</b>\n"
     msg += f"🔄 <i>Обновлено: {msk_time} МСК</i>\n"
     msg += "═" * 30 + "\n\n"
 
-    # Луны
     if upcoming_weather:
         msg += "🌙 <b>ЛУННЫЕ ФАЗЫ</b>\n"
         for w in upcoming_weather:
@@ -240,12 +287,11 @@ def format_predict_msg(data):
                 msg += f"  {info['emoji']} {info['name']} — {time_str}\n"
         msg += "\n"
 
-    # Редкий сток
     msg += "📦 <b>РЕДКИЙ СТОК</b>\n"
 
     if stock_now:
         msg += "  🟢 <b>В НАЛИЧИИ СЕЙЧАС:</b>\n"
-        for i in stock_now[:5]:
+        for i in stock_now[:10]:
             name = i.get('name', 'Неизвестно')
             mult = i.get('multiplier', '')
             if mult:
@@ -253,6 +299,8 @@ def format_predict_msg(data):
             else:
                 msg += f"    • {name}\n"
         msg += "\n"
+    else:
+        msg += "  🟢 <b>В НАЛИЧИИ СЕЙЧАС:</b> Нет\n\n"
 
     if upcoming_stock:
         msg += "  ⏳ <b>ОЖИДАЙТЕ В БЛИЖАЙШЕЕ ВРЕМЯ:</b>\n"
@@ -265,19 +313,58 @@ def format_predict_msg(data):
                 msg += f"    • {name} — {time_str} (через {minutes_left} мин.)\n"
             else:
                 msg += f"    • {name} — {time_str}\n"
+        msg += "\n"
     else:
-        msg += "  ⏳ Редких предметов в ближайшее время не ожидается.\n"
+        msg += "  ⏳ <b>ОЖИДАЙТЕ В БЛИЖАЙШЕЕ ВРЕМЯ:</b> Нет\n\n"
 
-    # Прошлые появления
     if past_stock:
-        msg += "\n  🕐 <b>БЫЛИ В СТОКЕ:</b>\n"
+        msg += "  🕐 <b>БЫЛИ В СТОКЕ:</b>\n"
         for i in past_stock:
             name = i.get('name', 'Неизвестно')
             ts = i.get('timestamp', 0)
             time_str = format_timestamp(ts)
             msg += f"    • {name} — {time_str}\n"
+    else:
+        msg += "  🕐 <b>БЫЛИ В СТОКЕ:</b> Нет\n"
 
     msg += "\n" + "═" * 30 + "\n"
+    msg += "🤖 Наш бот: @growagardenstock235_bot"
+    return msg
+
+# ================= МУЛЬТИПЛИКАТОРЫ =================
+
+def format_multipliers_message():
+    """Форматирует сообщение с мультипликаторами"""
+    multipliers = get_multipliers()
+    
+    if not multipliers:
+        return "❌ Не удалось получить данные о мультипликаторах"
+    
+    msg = "📊 <b>МУЛЬТИПЛИКАТОРЫ ПРЕДМЕТОВ</b>\n"
+    msg += f"🔄 <i>Обновлено: {get_msk_time().strftime('%H:%M:%S')} МСК</i>\n"
+    msg += "═" * 30 + "\n\n"
+    
+    high = []
+    low = []
+    
+    for item in multipliers:
+        mult = item.get('multiplier', 0)
+        name = item.get('name', 'Неизвестно')
+        if mult >= 1.0:
+            high.append(f"    • {name} — <b>x{mult:.2f}</b>")
+        else:
+            low.append(f"    • {name} — <b>x{mult:.2f}</b>")
+    
+    if high:
+        msg += "  🟢 <b>ВЫСОКИЕ МУЛЬТИПЛИКАТОРЫ (1.0+):</b>\n"
+        msg += "\n".join(high) + "\n\n"
+    
+    if low:
+        msg += "  🔴 <b>НИЗКИЕ МУЛЬТИПЛИКАТОРЫ (&lt;1.0):</b>\n"
+        msg += "\n".join(low) + "\n"
+    
+    msg += "\n" + "═" * 30 + "\n"
+    msg += "💡 <i>Чем выше множитель, тем дороже предмет при продаже</i>\n"
     msg += "🤖 Наш бот: @growagardenstock235_bot"
     return msg
 
@@ -382,9 +469,18 @@ async def predict_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = format_predict_msg(data)
     sent = await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
     
-    # Сохраняем ID сообщения для автообновления
     predict_messages[chat_id] = sent.message_id
     save_json(PREDICT_MESSAGES_FILE, predict_messages)
+
+async def multipliers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /multipliers — показывает мультипликаторы предметов"""
+    chat_id = str(update.effective_chat.id)
+    msg = format_multipliers_message()
+    sent = await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+    
+    # Сохраняем ID сообщения для автообновления
+    multiplier_messages[chat_id] = sent.message_id
+    save_json(MULTIPLIER_MESSAGES_FILE, multiplier_messages)
 
 async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -414,7 +510,6 @@ async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Ошибка: {e}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Проверяем, что команда вызвана в личном чате, а не в группе
     if update.effective_chat.type != "private":
         await update.message.reply_text("❌ Эта команда работает только в личных сообщениях с ботом!")
         return
@@ -433,7 +528,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "❌ — не получать\n\n"
         f"📦 <b>Всего предметов:</b> {len(items)}\n\n"
         "🔮 /predict — предсказания лун и стока\n"
-        "🌤️ /weather — текущая погода",
+        "🌤️ /weather — текущая погода\n"
+        "📊 /multipliers — мультипликаторы предметов",
         parse_mode=ParseMode.HTML,
         reply_markup=get_main_menu()
     )
@@ -473,6 +569,7 @@ def get_main_menu():
         [InlineKeyboardButton("⚙️ Снаряжение", callback_data="category_Снаряжение")],
         [InlineKeyboardButton("📋 Мои подписки", callback_data="view_subscriptions")],
         [InlineKeyboardButton("📦 Весь сток", callback_data="show_full_stock")],
+        [InlineKeyboardButton("📊 Мультипликаторы", callback_data="show_multipliers")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -616,230 +713,286 @@ def get_subscriptions_menu(user_id, page=0):
 # ================= ОБРАБОТЧИКИ КНОПОК =================
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = str(query.from_user.id)
-    chat_id = query.message.chat_id
-    data = query.data
+    try:
+        query = update.callback_query
+        user_id = str(query.from_user.id)
+        chat_id = query.message.chat_id
+        data = query.data
 
-    if data == "ignore":
+        logger.info(f"Получен callback: {data} от {user_id}")
+
+        if data == "ignore":
+            await query.answer()
+            return
+
         await query.answer()
-        return
 
-    # Обязательно отвечаем на callback, чтобы кнопка перестала быть "загруженной"
-    await query.answer()
+        if user_id not in user_settings:
+            user_settings[user_id] = {"subscriptions": []}
+            save_json(DATA_FILE, user_settings)
 
-    if user_id not in user_settings:
-        user_settings[user_id] = {"subscriptions": []}
-        save_json(DATA_FILE, user_settings)
-
-    # === ОБЫЧНОЕ МЕНЮ ===
-    if data == "back_to_menu":
-        items = load_items()
-        await query.edit_message_text(
-            "🌱 <b>Grow a Garden 2 Tracker</b>\n\n"
-            f"📦 <b>Всего предметов:</b> {len(items)}",
-            parse_mode=ParseMode.HTML,
-            reply_markup=get_main_menu()
-        )
-        return
-
-    elif data == "show_full_stock":
-        try:
-            resp = requests.get(API_URL, timeout=15)
-            if resp.status_code == 200:
-                await query.edit_message_text(format_full_stock_message(resp.json()), parse_mode=ParseMode.HTML, reply_markup=get_main_menu())
-            else:
-                await query.edit_message_text("❌ Ошибка API", reply_markup=get_main_menu())
-        except Exception as e:
-            await query.edit_message_text(f"❌ {e}", reply_markup=get_main_menu())
-        return
-
-    elif data == "view_subscriptions":
-        subscriptions = user_settings[user_id].get("subscriptions", [])
-        if not subscriptions:
-            await query.edit_message_text("📋 <b>Нет подписок</b>", parse_mode=ParseMode.HTML, reply_markup=get_main_menu())
-        else:
-            await query.edit_message_text("📋 <b>Твои подписки</b>", parse_mode=ParseMode.HTML, reply_markup=get_subscriptions_menu(user_id))
-        return
-
-    elif data.startswith("sub_page_"):
-        page = int(data.split("_")[2])
-        await query.edit_message_reply_markup(reply_markup=get_subscriptions_menu(user_id, page))
-        return
-
-    elif data.startswith("unsub_"):
-        item_name = data.replace("unsub_", "")
-        subscriptions = user_settings[user_id].get("subscriptions", [])
-        subscriptions = [s for s in subscriptions if s != item_name]
-        user_settings[user_id]["subscriptions"] = subscriptions
-        save_json(DATA_FILE, user_settings)
-        
-        if subscriptions:
-            await query.edit_message_text("📋 <b>Твои подписки</b>", parse_mode=ParseMode.HTML, reply_markup=get_subscriptions_menu(user_id))
-        else:
-            await query.edit_message_text("📋 <b>Нет подписок</b>", parse_mode=ParseMode.HTML, reply_markup=get_main_menu())
-        return
-
-    elif data.startswith("category_"):
-        category = data.replace("category_", "")
-        await query.edit_message_text(f"📂 <b>{category}</b>", parse_mode=ParseMode.HTML, reply_markup=get_items_menu(user_id, category, 0))
-        return
-
-    elif data.startswith("item_"):
-        parts = data.split("_")
-        category = parts[1]
-        page = int(parts[2])
-        item_name = "_".join(parts[3:])
-        
-        subscriptions = user_settings[user_id].get("subscriptions", [])
-        if item_name in subscriptions:
-            subscriptions.remove(item_name)
-            await query.answer(f"❌ {item_name} удалён")
-        else:
-            subscriptions.append(item_name)
-            await query.answer(f"✅ {item_name} добавлен")
-        
-        user_settings[user_id]["subscriptions"] = subscriptions
-        save_json(DATA_FILE, user_settings)
-        await query.edit_message_reply_markup(reply_markup=get_items_menu(user_id, category, page))
-        return
-
-    elif data.startswith("page_"):
-        parts = data.split("_")
-        category = parts[1]
-        page = int(parts[2])
-        await query.edit_message_reply_markup(reply_markup=get_items_menu(user_id, category, page))
-        return
-
-    # === АДМИН-ПАНЕЛЬ ===
-    elif data.startswith("admin_"):
-        if int(user_id) not in ADMIN_IDS:
-            await query.edit_message_text("❌ Нет прав!")
+        if data == "back_to_menu":
+            items = load_items()
+            await query.edit_message_text(
+                "🌱 <b>Grow a Garden 2 Tracker</b>\n\n"
+                f"📦 <b>Всего предметов:</b> {len(items)}",
+                parse_mode=ParseMode.HTML,
+                reply_markup=get_main_menu()
+            )
             return
-        
-        if data == "admin_close":
-            await query.edit_message_text("👑 Админ-панель закрыта", reply_markup=None)
-            admin_state[str(chat_id)] = None
-            save_json(ADMIN_STATE_FILE, admin_state)
+
+        elif data == "show_full_stock":
+            try:
+                resp = requests.get(API_URL, timeout=15)
+                if resp.status_code == 200:
+                    await query.edit_message_text(format_full_stock_message(resp.json()), parse_mode=ParseMode.HTML, reply_markup=get_main_menu())
+                else:
+                    await query.edit_message_text("❌ Ошибка API", reply_markup=get_main_menu())
+            except Exception as e:
+                await query.edit_message_text(f"❌ {e}", reply_markup=get_main_menu())
             return
-        
-        elif data == "admin_back":
-            admin_state[str(chat_id)] = None
-            save_json(ADMIN_STATE_FILE, admin_state)
-            await query.edit_message_text("👑 <b>Админ-панель</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_menu(chat_id))
+
+        elif data == "show_multipliers":
+            msg = format_multipliers_message()
+            sent = await query.edit_message_text(msg, parse_mode=ParseMode.HTML, reply_markup=get_main_menu())
+            # Сохраняем ID для автообновления
+            multiplier_messages[str(chat_id)] = sent.message_id
+            save_json(MULTIPLIER_MESSAGES_FILE, multiplier_messages)
             return
-        
-        elif data == "admin_back_to_categories":
-            action = admin_state.get(str(chat_id), "add")
-            await query.edit_message_text("📂 <b>Выбери категорию:</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_category_menu(action))
-            return
-        
-        elif data == "admin_view_subs":
-            subscriptions = group_settings.get(str(chat_id), {}).get("subscriptions", [])
+
+        elif data == "view_subscriptions":
+            subscriptions = user_settings[user_id].get("subscriptions", [])
             if not subscriptions:
-                await query.edit_message_text("📋 <b>Нет подписок</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_menu(chat_id))
+                await query.edit_message_text("📋 <b>Нет подписок</b>", parse_mode=ParseMode.HTML, reply_markup=get_main_menu())
             else:
-                await query.edit_message_text("📋 <b>Подписки группы</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_subscriptions_menu(chat_id))
+                await query.edit_message_text("📋 <b>Твои подписки</b>", parse_mode=ParseMode.HTML, reply_markup=get_subscriptions_menu(user_id))
             return
-        
-        elif data == "admin_toggle_weather":
-            settings = group_settings.get(str(chat_id), {"subscriptions": [], "weather": False})
-            settings["weather"] = not settings.get("weather", False)
-            group_settings[str(chat_id)] = settings
-            save_json(GROUP_SETTINGS_FILE, group_settings)
-            status = "включена" if settings["weather"] else "выключена"
-            await query.answer(f"🌤️ Погода {status}")
-            await query.edit_message_reply_markup(reply_markup=get_admin_menu(chat_id))
+
+        elif data.startswith("sub_page_"):
+            page = int(data.split("_")[2])
+            await query.edit_message_reply_markup(reply_markup=get_subscriptions_menu(user_id, page))
             return
-        
-        elif data == "admin_add_items":
-            admin_state[str(chat_id)] = "add"
-            save_json(ADMIN_STATE_FILE, admin_state)
-            await query.edit_message_text("📂 <b>Выбери категорию:</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_category_menu('add'))
-            return
-        
-        elif data == "admin_remove_items":
-            admin_state[str(chat_id)] = "remove"
-            save_json(ADMIN_STATE_FILE, admin_state)
-            await query.edit_message_text("📂 <b>Выбери категорию:</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_category_menu('remove'))
-            return
-        
-        elif data == "admin_clear_all":
-            group_settings[str(chat_id)] = {"subscriptions": [], "weather": group_settings.get(str(chat_id), {}).get("weather", False)}
-            save_json(GROUP_SETTINGS_FILE, group_settings)
-            await query.answer("🗑️ Все подписки очищены")
-            await query.edit_message_text("👑 <b>Админ-панель</b>\n\nВсе подписки очищены!", parse_mode=ParseMode.HTML, reply_markup=get_admin_menu(chat_id))
-            return
-        
-        elif data.startswith("admin_category_"):
-            parts = data.split("_")
-            action = parts[2]
-            category = parts[3]
-            admin_state[str(chat_id)] = action
-            save_json(ADMIN_STATE_FILE, admin_state)
-            await query.edit_message_text(f"📂 <b>{category}</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_items_menu(chat_id, category, action, 0))
-            return
-        
-        elif data.startswith("admin_item_"):
-            parts = data.split("_")
-            action = parts[2]
-            category = parts[3]
-            page = int(parts[4])
-            item_name = "_".join(parts[5:])
+
+        elif data.startswith("unsub_"):
+            item_name = data.replace("unsub_", "")
+            subscriptions = user_settings[user_id].get("subscriptions", [])
+            subscriptions = [s for s in subscriptions if s != item_name]
+            user_settings[user_id]["subscriptions"] = subscriptions
+            save_json(DATA_FILE, user_settings)
             
-            settings = group_settings.get(str(chat_id), {"subscriptions": [], "weather": False})
-            subscriptions = settings.get("subscriptions", [])
-            
-            if action == "add":
-                if item_name not in subscriptions:
-                    subscriptions.append(item_name)
-                    await query.answer(f"✅ {item_name} добавлен")
-                else:
-                    await query.answer(f"ℹ️ {item_name} уже в списке")
+            if subscriptions:
+                await query.edit_message_text("📋 <b>Твои подписки</b>", parse_mode=ParseMode.HTML, reply_markup=get_subscriptions_menu(user_id))
             else:
-                if item_name in subscriptions:
-                    subscriptions.remove(item_name)
-                    await query.answer(f"❌ {item_name} удалён")
-                else:
-                    await query.answer(f"ℹ️ {item_name} не в списке")
-            
-            settings["subscriptions"] = subscriptions
-            group_settings[str(chat_id)] = settings
-            save_json(GROUP_SETTINGS_FILE, group_settings)
-            await query.edit_message_reply_markup(reply_markup=get_admin_items_menu(chat_id, category, action, page))
+                await query.edit_message_text("📋 <b>Нет подписок</b>", parse_mode=ParseMode.HTML, reply_markup=get_main_menu())
             return
-        
-        elif data.startswith("admin_page_"):
+
+        elif data.startswith("category_"):
+            category = data.replace("category_", "")
+            await query.edit_message_text(f"📂 <b>{category}</b>", parse_mode=ParseMode.HTML, reply_markup=get_items_menu(user_id, category, 0))
+            return
+
+        elif data.startswith("item_"):
             parts = data.split("_")
-            action = parts[2]
-            category = parts[3]
-            page = int(parts[4])
-            await query.edit_message_reply_markup(reply_markup=get_admin_items_menu(chat_id, category, action, page))
-            return
-        
-        elif data.startswith("admin_subs_page_"):
-            page = int(data.split("_")[3])
-            await query.edit_message_reply_markup(reply_markup=get_admin_subscriptions_menu(chat_id, page))
-            return
-        
-        elif data.startswith("admin_unsub_"):
-            item_name = data.replace("admin_unsub_", "")
-            settings = group_settings.get(str(chat_id), {"subscriptions": [], "weather": False})
-            settings["subscriptions"] = [s for s in settings.get("subscriptions", []) if s != item_name]
-            group_settings[str(chat_id)] = settings
-            save_json(GROUP_SETTINGS_FILE, group_settings)
-            await query.answer(f"❌ {item_name} удалён")
+            category = parts[1]
+            page = int(parts[2])
+            item_name = "_".join(parts[3:])
             
-            if settings["subscriptions"]:
-                await query.edit_message_text("📋 <b>Подписки группы</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_subscriptions_menu(chat_id))
+            subscriptions = user_settings[user_id].get("subscriptions", [])
+            if item_name in subscriptions:
+                subscriptions.remove(item_name)
+                await query.answer(f"❌ {item_name} удалён")
             else:
+                subscriptions.append(item_name)
+                await query.answer(f"✅ {item_name} добавлен")
+            
+            user_settings[user_id]["subscriptions"] = subscriptions
+            save_json(DATA_FILE, user_settings)
+            await query.edit_message_reply_markup(reply_markup=get_items_menu(user_id, category, page))
+            return
+
+        elif data.startswith("page_"):
+            parts = data.split("_")
+            category = parts[1]
+            page = int(parts[2])
+            await query.edit_message_reply_markup(reply_markup=get_items_menu(user_id, category, page))
+            return
+
+        elif data.startswith("admin_"):
+            logger.info(f"Обработка админ-кнопки: {data}")
+            
+            if int(user_id) not in ADMIN_IDS:
+                await query.edit_message_text("❌ Нет прав!")
+                return
+            
+            if data == "admin_close":
+                await query.edit_message_text("👑 Админ-панель закрыта", reply_markup=None)
+                admin_state[str(chat_id)] = None
+                save_json(ADMIN_STATE_FILE, admin_state)
+                return
+            
+            elif data == "admin_back":
+                admin_state[str(chat_id)] = None
+                save_json(ADMIN_STATE_FILE, admin_state)
                 await query.edit_message_text("👑 <b>Админ-панель</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_menu(chat_id))
-            return
+                return
+            
+            elif data == "admin_back_to_categories":
+                action = admin_state.get(str(chat_id), "add")
+                await query.edit_message_text("📂 <b>Выбери категорию:</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_category_menu(action))
+                return
+            
+            elif data == "admin_view_subs":
+                subscriptions = group_settings.get(str(chat_id), {}).get("subscriptions", [])
+                if not subscriptions:
+                    await query.edit_message_text("📋 <b>Нет подписок</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_menu(chat_id))
+                else:
+                    await query.edit_message_text("📋 <b>Подписки группы</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_subscriptions_menu(chat_id))
+                return
+            
+            elif data == "admin_toggle_weather":
+                settings = group_settings.get(str(chat_id), {"subscriptions": [], "weather": False})
+                settings["weather"] = not settings.get("weather", False)
+                group_settings[str(chat_id)] = settings
+                save_json(GROUP_SETTINGS_FILE, group_settings)
+                status = "включена" if settings["weather"] else "выключена"
+                await query.answer(f"🌤️ Погода {status}")
+                await query.edit_message_reply_markup(reply_markup=get_admin_menu(chat_id))
+                return
+            
+            elif data == "admin_add_items":
+                admin_state[str(chat_id)] = "add"
+                save_json(ADMIN_STATE_FILE, admin_state)
+                await query.edit_message_text("📂 <b>Выбери категорию:</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_category_menu('add'))
+                return
+            
+            elif data == "admin_remove_items":
+                admin_state[str(chat_id)] = "remove"
+                save_json(ADMIN_STATE_FILE, admin_state)
+                await query.edit_message_text("📂 <b>Выбери категорию:</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_category_menu('remove'))
+                return
+            
+            elif data == "admin_clear_all":
+                group_settings[str(chat_id)] = {"subscriptions": [], "weather": group_settings.get(str(chat_id), {}).get("weather", False)}
+                save_json(GROUP_SETTINGS_FILE, group_settings)
+                await query.answer("🗑️ Все подписки очищены")
+                await query.edit_message_text("👑 <b>Админ-панель</b>\n\nВсе подписки очищены!", parse_mode=ParseMode.HTML, reply_markup=get_admin_menu(chat_id))
+                return
+            
+            elif data.startswith("admin_category_"):
+                parts = data.split("_")
+                action = parts[2]
+                category = parts[3]
+                admin_state[str(chat_id)] = action
+                save_json(ADMIN_STATE_FILE, admin_state)
+                await query.edit_message_text(f"📂 <b>{category}</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_items_menu(chat_id, category, action, 0))
+                return
+            
+            elif data.startswith("admin_item_"):
+                parts = data.split("_")
+                action = parts[2]
+                category = parts[3]
+                page = int(parts[4])
+                item_name = "_".join(parts[5:])
+                
+                settings = group_settings.get(str(chat_id), {"subscriptions": [], "weather": False})
+                subscriptions = settings.get("subscriptions", [])
+                
+                if action == "add":
+                    if item_name not in subscriptions:
+                        subscriptions.append(item_name)
+                        await query.answer(f"✅ {item_name} добавлен")
+                    else:
+                        await query.answer(f"ℹ️ {item_name} уже в списке")
+                else:
+                    if item_name in subscriptions:
+                        subscriptions.remove(item_name)
+                        await query.answer(f"❌ {item_name} удалён")
+                    else:
+                        await query.answer(f"ℹ️ {item_name} не в списке")
+                
+                settings["subscriptions"] = subscriptions
+                group_settings[str(chat_id)] = settings
+                save_json(GROUP_SETTINGS_FILE, group_settings)
+                await query.edit_message_reply_markup(reply_markup=get_admin_items_menu(chat_id, category, action, page))
+                return
+            
+            elif data.startswith("admin_page_"):
+                parts = data.split("_")
+                action = parts[2]
+                category = parts[3]
+                page = int(parts[4])
+                await query.edit_message_reply_markup(reply_markup=get_admin_items_menu(chat_id, category, action, page))
+                return
+            
+            elif data.startswith("admin_subs_page_"):
+                page = int(data.split("_")[3])
+                await query.edit_message_reply_markup(reply_markup=get_admin_subscriptions_menu(chat_id, page))
+                return
+            
+            elif data.startswith("admin_unsub_"):
+                item_name = data.replace("admin_unsub_", "")
+                settings = group_settings.get(str(chat_id), {"subscriptions": [], "weather": False})
+                settings["subscriptions"] = [s for s in settings.get("subscriptions", []) if s != item_name]
+                group_settings[str(chat_id)] = settings
+                save_json(GROUP_SETTINGS_FILE, group_settings)
+                await query.answer(f"❌ {item_name} удалён")
+                
+                if settings["subscriptions"]:
+                    await query.edit_message_text("📋 <b>Подписки группы</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_subscriptions_menu(chat_id))
+                else:
+                    await query.edit_message_text("👑 <b>Админ-панель</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_menu(chat_id))
+                return
+            
+            logger.warning(f"Неизвестный admin callback: {data}")
+
+    except Exception as e:
+        logger.error(f"Ошибка в button_handler: {e}")
+        logger.error(traceback.format_exc())
+        try:
+            await update.callback_query.answer("❌ Ошибка")
+        except:
+            pass
 
 # ================= ФОНОВЫЕ ЗАДАЧИ =================
 
 async def update_predictions_job(context: ContextTypes.DEFAULT_TYPE):
-    """Автообновление предсказаний каждые 30 секунд"""
+    """Автообновление предсказаний и мультипликаторов каждые 30 секунд"""
+    global multipliers_cache, _multipliers_cache_time
+    
+    # === ОБНОВЛЯЕМ МУЛЬТИПЛИКАТОРЫ ===
+    # Принудительно сбрасываем кеш, чтобы получить свежие данные
+    multipliers_cache = {}
+    _multipliers_cache_time = 0
+    get_multipliers()  # Обновляем
+    
+    # Обновляем сообщения с мультипликаторами
+    if not multiplier_messages:
+        saved = load_json(MULTIPLIER_MESSAGES_FILE, {})
+        if saved:
+            multiplier_messages.update(saved)
+    
+    if multiplier_messages:
+        msg = format_multipliers_message()
+        dead_chats = []
+        for chat_id, msg_id in multiplier_messages.items():
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=int(chat_id),
+                    message_id=msg_id,
+                    text=msg,
+                    parse_mode=ParseMode.HTML
+                )
+                logger.info(f"✅ Мультипликаторы обновлены для {chat_id}")
+            except Exception as e:
+                logger.warning(f"⚠️ Не удалось обновить мультипликаторы для {chat_id}: {e}")
+                dead_chats.append(chat_id)
+        
+        for dc in dead_chats:
+            multiplier_messages.pop(dc, None)
+        if dead_chats:
+            save_json(MULTIPLIER_MESSAGES_FILE, multiplier_messages)
+
+    # === ОБНОВЛЯЕМ ПРЕДСКАЗАНИЯ ===
     if not predict_messages:
         saved = load_json(PREDICT_MESSAGES_FILE, {})
         if saved:
@@ -864,7 +1017,7 @@ async def update_predictions_job(context: ContextTypes.DEFAULT_TYPE):
             )
             logger.info(f"✅ Предсказания обновлены для {chat_id}")
         except Exception as e:
-            logger.warning(f"⚠️ Не удалось обновить {chat_id}: {e}")
+            logger.warning(f"⚠️ Не удалось обновить предсказания для {chat_id}: {e}")
             dead_chats.append(chat_id)
     
     for dc in dead_chats:
@@ -883,7 +1036,6 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
         new_stock_sig = get_stock_signature(data)
         new_weather = get_weather_type(data)
 
-        # === ПОГОДА ===
         if last_weather_data is None:
             last_weather_data = new_weather
         elif new_weather != last_weather_data:
@@ -902,7 +1054,6 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
             
             last_weather_data = new_weather
 
-        # === СТОК ===
         if last_stock_data is None:
             last_stock_data = new_stock_sig
             return
@@ -910,7 +1061,6 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
         added, removed, changed = get_changes(last_stock_data, new_stock_sig)
 
         if added or removed or changed:
-            # Группы
             for chat_id_str, settings in group_settings.items():
                 subs = settings.get("subscriptions", [])
                 g_added = {n: s for n, s in added.items() if n in subs}
@@ -924,7 +1074,6 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                     except:
                         pass
 
-            # ЛС
             for uid, settings in user_settings.items():
                 subs = settings.get("subscriptions", [])
                 u_added = {n: s for n, s in added.items() if n in subs}
@@ -953,27 +1102,28 @@ def main():
         logger.error("Токен не найден!")
         return
 
-    # Загружаем данные при старте
-    global user_settings, group_settings, predict_messages, admin_state
+    global user_settings, group_settings, predict_messages, admin_state, multiplier_messages
     user_settings = load_json(DATA_FILE, {})
     group_settings = load_json(GROUP_SETTINGS_FILE, {})
     predict_messages = load_json(PREDICT_MESSAGES_FILE, {})
     admin_state = load_json(ADMIN_STATE_FILE, {})
+    multiplier_messages = load_json(MULTIPLIER_MESSAGES_FILE, {})
     
     load_items()
+    get_multipliers()  # Предзагружаем мультипликаторы
 
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CommandHandler("weather", weather_command))
     app.add_handler(CommandHandler("predict", predict_command))
+    app.add_handler(CommandHandler("multipliers", multipliers_command))
     app.add_handler(CallbackQueryHandler(button_handler))
     
-    # Задачи
     app.job_queue.run_repeating(check_and_notify, interval=10, first=5)
     app.job_queue.run_repeating(update_predictions_job, interval=30, first=10)
 
-    logger.info("✅ Бот запущен! Доступны команды: /start, /admin, /weather, /predict")
+    logger.info("✅ Бот запущен! Доступны команды: /start, /admin, /weather, /predict, /multipliers")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
