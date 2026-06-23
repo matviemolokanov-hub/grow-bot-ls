@@ -24,6 +24,7 @@ ITEMS_CACHE_FILE = os.path.join(DATA_DIR, "items_cache.json")
 PREDICT_MESSAGES_FILE = os.path.join(DATA_DIR, "predict_messages.json")
 ADMIN_STATE_FILE = os.path.join(DATA_DIR, "admin_state.json")
 MULTIPLIERS_CACHE_FILE = os.path.join(DATA_DIR, "multipliers_cache.json")
+MULTIPLIER_MESSAGES_FILE = os.path.join(DATA_DIR, "multiplier_messages.json")
 
 CACHE_TTL = 300
 
@@ -99,9 +100,7 @@ admin_state = load_json(ADMIN_STATE_FILE, {})
 # Кеш для мультипликаторов
 multipliers_cache = {}
 _multipliers_cache_time = 0
-# Храним ID сообщения мультипликаторов для автообновления
-multiplier_messages = {}  # {chat_id: message_id}
-MULTIPLIER_MESSAGES_FILE = os.path.join(DATA_DIR, "multiplier_messages.json")
+multiplier_messages = load_json(MULTIPLIER_MESSAGES_FILE, {})
 
 # ================= КЕШИРОВАНИЕ =================
 def get_all_items_from_api(data):
@@ -157,7 +156,6 @@ def get_multipliers():
             multipliers.sort(key=lambda x: x.get('multiplier', 0), reverse=True)
             multipliers_cache = multipliers
             _multipliers_cache_time = time.time()
-            # Сохраняем в файл
             save_json(MULTIPLIERS_CACHE_FILE, {
                 'multipliers': multipliers,
                 'timestamp': _multipliers_cache_time
@@ -166,7 +164,6 @@ def get_multipliers():
             return multipliers
     except Exception as e:
         logger.error(f"Ошибка получения мультипликаторов: {e}")
-        # Пробуем загрузить из файла
         cached = load_json(MULTIPLIERS_CACHE_FILE)
         if cached.get('multipliers'):
             multipliers_cache = cached['multipliers']
@@ -231,48 +228,36 @@ def format_predict_msg(data):
         key=lambda x: x['timestamp']
     )[:10]
 
-    # === РЕДКИЙ СТОК (все редкие предметы, которые могут быть) ===
-    all_rare_items = [
+    # === ТОЛЬКО НУЖНЫЕ ПРЕДМЕТЫ ===
+    important_names = [
         "Dragon's Breath", "Moon Bloom", "Venom Spitter", "Sunflower",
-        "Legendary Sprinkler", "Super Sprinkler", "Super Watering Can",
-        "Venus Fly Trap", "Poison Apple", "Pomegranate", "Acorn",
-        "Dragon Fruit", "Mango", "Cherry", "Grappling Hook",
-        "Player Magnet", "Strawberry Sniper", "Flashbang"
+        "Legendary Sprinkler", "Super Sprinkler", "Super Watering Can"
     ]
-    
-    try:
-        resp = requests.get(API_URL, timeout=10)
-        if resp.status_code == 200:
-            shop_data = resp.json()
-            for shop_type in ["SeedShop_Normal", "CrateShop", "GearShop"]:
-                for item in shop_data.get("shops", {}).get(shop_type, []):
-                    rarity = item.get('rarity', 'Common')
-                    if rarity in ['Rare', 'Epic', 'Legendary', 'Mythic', 'Super']:
-                        name = item.get('name')
-                        if name and name not in all_rare_items:
-                            all_rare_items.append(name)
-    except:
-        pass
 
     all_items_p = data.get('seeds', []) + data.get('gears', []) + data.get('props', [])
     
-    stock_now = [i for i in all_items_p if i.get('relativeText') == "*Currently on Stock*" and i.get('name') in all_rare_items]
+    # В наличии сейчас
+    stock_now = [i for i in all_items_p if i.get('relativeText') == "*Currently on Stock*" and i.get('name') in important_names]
     
+    # Будущие появления
     upcoming_stock = sorted(
-        [i for i in all_items_p if i.get('name') in all_rare_items and i.get('timestamp', 0) > now],
+        [i for i in all_items_p if i.get('name') in important_names and i.get('timestamp', 0) > now],
         key=lambda x: x['timestamp']
     )[:15]
     
+    # Прошлые появления
     past_stock = sorted(
-        [i for i in all_items_p if i.get('name') in all_rare_items and i.get('timestamp', 0) < now and i.get('relativeText') != "*Currently on Stock*"],
+        [i for i in all_items_p if i.get('name') in important_names and i.get('timestamp', 0) < now and i.get('relativeText') != "*Currently on Stock*"],
         key=lambda x: x['timestamp'],
         reverse=True
     )[:10]
 
+    # === ФОРМИРУЕМ СООБЩЕНИЕ ===
     msg = "🔮 <b>ПРЕДСКАЗАНИЯ</b>\n"
     msg += f"🔄 <i>Обновлено: {msk_time} МСК</i>\n"
     msg += "═" * 30 + "\n\n"
 
+    # Луны
     if upcoming_weather:
         msg += "🌙 <b>ЛУННЫЕ ФАЗЫ</b>\n"
         for w in upcoming_weather:
@@ -287,6 +272,7 @@ def format_predict_msg(data):
                 msg += f"  {info['emoji']} {info['name']} — {time_str}\n"
         msg += "\n"
 
+    # Редкий сток
     msg += "📦 <b>РЕДКИЙ СТОК</b>\n"
 
     if stock_now:
@@ -478,7 +464,6 @@ async def multipliers_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     msg = format_multipliers_message()
     sent = await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
     
-    # Сохраняем ID сообщения для автообновления
     multiplier_messages[chat_id] = sent.message_id
     save_json(MULTIPLIER_MESSAGES_FILE, multiplier_messages)
 
@@ -719,7 +704,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = query.message.chat_id
         data = query.data
 
-        logger.info(f"Получен callback: {data} от {user_id}")
+        logger.info(f"📥 Получен callback: {data} от {user_id}")
 
         if data == "ignore":
             await query.answer()
@@ -731,6 +716,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_settings[user_id] = {"subscriptions": []}
             save_json(DATA_FILE, user_settings)
 
+        # === ОБЫЧНОЕ МЕНЮ ===
         if data == "back_to_menu":
             items = load_items()
             await query.edit_message_text(
@@ -755,7 +741,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data == "show_multipliers":
             msg = format_multipliers_message()
             sent = await query.edit_message_text(msg, parse_mode=ParseMode.HTML, reply_markup=get_main_menu())
-            # Сохраняем ID для автообновления
             multiplier_messages[str(chat_id)] = sent.message_id
             save_json(MULTIPLIER_MESSAGES_FILE, multiplier_messages)
             return
@@ -817,8 +802,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_reply_markup(reply_markup=get_items_menu(user_id, category, page))
             return
 
+        # === АДМИН-ПАНЕЛЬ ===
         elif data.startswith("admin_"):
-            logger.info(f"Обработка админ-кнопки: {data}")
+            logger.info(f"🔧 Обработка админ-кнопки: {data}")
             
             if int(user_id) not in ADMIN_IDS:
                 await query.edit_message_text("❌ Нет прав!")
@@ -943,10 +929,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await query.edit_message_text("👑 <b>Админ-панель</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_menu(chat_id))
                 return
             
-            logger.warning(f"Неизвестный admin callback: {data}")
+            logger.warning(f"⚠️ Неизвестный admin callback: {data}")
 
     except Exception as e:
-        logger.error(f"Ошибка в button_handler: {e}")
+        logger.error(f"❌ Ошибка в button_handler: {e}")
         logger.error(traceback.format_exc())
         try:
             await update.callback_query.answer("❌ Ошибка")
@@ -959,13 +945,11 @@ async def update_predictions_job(context: ContextTypes.DEFAULT_TYPE):
     """Автообновление предсказаний и мультипликаторов каждые 30 секунд"""
     global multipliers_cache, _multipliers_cache_time
     
-    # === ОБНОВЛЯЕМ МУЛЬТИПЛИКАТОРЫ ===
-    # Принудительно сбрасываем кеш, чтобы получить свежие данные
+    # Обновляем мультипликаторы
     multipliers_cache = {}
     _multipliers_cache_time = 0
-    get_multipliers()  # Обновляем
+    get_multipliers()
     
-    # Обновляем сообщения с мультипликаторами
     if not multiplier_messages:
         saved = load_json(MULTIPLIER_MESSAGES_FILE, {})
         if saved:
@@ -992,7 +976,7 @@ async def update_predictions_job(context: ContextTypes.DEFAULT_TYPE):
         if dead_chats:
             save_json(MULTIPLIER_MESSAGES_FILE, multiplier_messages)
 
-    # === ОБНОВЛЯЕМ ПРЕДСКАЗАНИЯ ===
+    # Обновляем предсказания
     if not predict_messages:
         saved = load_json(PREDICT_MESSAGES_FILE, {})
         if saved:
@@ -1110,7 +1094,7 @@ def main():
     multiplier_messages = load_json(MULTIPLIER_MESSAGES_FILE, {})
     
     load_items()
-    get_multipliers()  # Предзагружаем мультипликаторы
+    get_multipliers()
 
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
