@@ -167,7 +167,7 @@ def format_predict_msg(data):
     msg = f"🔮 <b>ПРЕДСКАЗАНИЯ</b>\n🔄 <i>Обновлено: {msk_time} МСК</i>\n"
     msg += "═" * 30 + "\n\n"
 
-    # Погода (лунные фазы)
+    # Лунные фазы
     weathers = sorted([w for w in data.get('weathers', []) if w.get('timestamp', 0) > now], key=lambda x: x['timestamp'])[:10]
     if weathers:
         msg += "🌙 <b>ЛУННЫЕ ФАЗЫ</b>\n"
@@ -485,4 +485,4 @@ async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg += f"\n🕐 {get_msk_time().strftime('%H:%M:%S')} МСК\n\n🤖 Наш бот: @growagardenstock235_bot"
             await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
         else:
-            await update.mess
+            await update.message.reply
