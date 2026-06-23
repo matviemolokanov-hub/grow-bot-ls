@@ -5,6 +5,7 @@ from datetime import datetime, timezone, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from telegram.constants import ParseMode
+from telegram.error import BadRequest
 import os
 import time
 import traceback
@@ -51,6 +52,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ================= ВРЕМЯ МСК =================
 def get_msk_time():
     return datetime.now(timezone(timedelta(hours=3)))
 
@@ -59,6 +61,7 @@ def format_timestamp(ts):
         return "—"
     return datetime.fromtimestamp(ts, timezone(timedelta(hours=3))).strftime('%H:%M:%S')
 
+# ================= СОХРАНЕНИЕ =================
 def load_json(filename, default=None):
     try:
         if os.path.exists(filename):
@@ -78,6 +81,19 @@ def save_json(filename, data):
     except Exception as e:
         logger.error(f"Ошибка сохранения {filename}: {e}")
         return False
+
+# Безопасное изменение сообщений для устранения зависания
+async def safe_edit(query, text=None, reply_markup=None):
+    try:
+        if text is not None:
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+        elif reply_markup is not None:
+            await query.edit_message_reply_markup(reply_markup=reply_markup)
+    except BadRequest as e:
+        if "Message is not modified" not in str(e):
+            logger.error(f"Ошибка изменения сообщения: {e}")
+    except Exception as e:
+        logger.error(f"Ошибка в safe_edit: {e}")
 
 user_settings = load_json(DATA_FILE, {})
 group_settings = load_json(GROUP_SETTINGS_FILE, {})
@@ -621,12 +637,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = query.message.chat_id
         data = query.data
 
-        logger.info(f"🔘 НАЖАТА КНОПКА: {data} от {user_id}")
+        logger.info(f"📥 ПОЛУЧЕН callback: {data} от {user_id}")
 
         if data == "ignore":
             await query.answer()
             return
 
+        # Сразу отправляем ответ серверу Telegram, чтобы кнопка мгновенно разлагала
         await query.answer()
 
         if user_id not in user_settings:
@@ -636,10 +653,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # === ОБЫЧНЫЕ КНОПКИ ===
         if data == "back_to_menu":
             items = load_items()
-            await query.edit_message_text(
-                "🌱 <b>Grow a Garden 2 Tracker</b>\n\n"
-                f"📦 <b>Всего предметов:</b> {len(items)}",
-                parse_mode=ParseMode.HTML,
+            await safe_edit(
+                query,
+                text="🌱 <b>Grow a Garden 2 Tracker</b>\n\n"
+                     f"📦 <b>Всего предметов:</b> {len(items)}",
                 reply_markup=get_main_menu()
             )
             return
@@ -648,31 +665,32 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 resp = requests.get(API_URL, timeout=15)
                 if resp.status_code == 200:
-                    await query.edit_message_text(format_full_stock_message(resp.json()), parse_mode=ParseMode.HTML, reply_markup=get_main_menu())
+                    await safe_edit(query, text=format_full_stock_message(resp.json()), reply_markup=get_main_menu())
                 else:
-                    await query.edit_message_text("❌ Ошибка API", reply_markup=get_main_menu())
+                    await safe_edit(query, text="❌ Ошибка API", reply_markup=get_main_menu())
             except Exception as e:
-                await query.edit_message_text(f"❌ {e}", reply_markup=get_main_menu())
+                await safe_edit(query, text=f"❌ {e}", reply_markup=get_main_menu())
             return
 
         elif data == "show_multipliers":
             msg = format_multipliers_message()
-            sent = await query.edit_message_text(msg, parse_mode=ParseMode.HTML, reply_markup=get_main_menu())
-            multiplier_messages[str(chat_id)] = sent.message_id
+            await safe_edit(query, text=msg, reply_markup=get_main_menu())
+            # Сохраняем сообщение
+            multiplier_messages[str(chat_id)] = query.message.message_id
             save_json(MULTIPLIER_MESSAGES_FILE, multiplier_messages)
             return
 
         elif data == "view_subscriptions":
             subscriptions = user_settings[user_id].get("subscriptions", [])
             if not subscriptions:
-                await query.edit_message_text("📋 <b>Нет подписок</b>", parse_mode=ParseMode.HTML, reply_markup=get_main_menu())
+                await safe_edit(query, text="📋 <b>Нет подписок</b>", reply_markup=get_main_menu())
             else:
-                await query.edit_message_text("📋 <b>Твои подписки</b>", parse_mode=ParseMode.HTML, reply_markup=get_subscriptions_menu(user_id))
+                await safe_edit(query, text="📋 <b>Твои подписки</b>", reply_markup=get_subscriptions_menu(user_id))
             return
 
         elif data.startswith("sub_page_"):
             page = int(data.split("_")[2])
-            await query.edit_message_reply_markup(reply_markup=get_subscriptions_menu(user_id, page))
+            await safe_edit(query, reply_markup=get_subscriptions_menu(user_id, page))
             return
 
         elif data.startswith("unsub_"):
@@ -683,14 +701,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             save_json(DATA_FILE, user_settings)
             
             if subscriptions:
-                await query.edit_message_text("📋 <b>Твои подписки</b>", parse_mode=ParseMode.HTML, reply_markup=get_subscriptions_menu(user_id))
+                await safe_edit(query, text="📋 <b>Твои подписки</b>", reply_markup=get_subscriptions_menu(user_id))
             else:
-                await query.edit_message_text("📋 <b>Нет подписок</b>", parse_mode=ParseMode.HTML, reply_markup=get_main_menu())
+                await safe_edit(query, text="📋 <b>Нет подписок</b>", reply_markup=get_main_menu())
             return
 
         elif data.startswith("category_"):
             category = data.replace("category_", "")
-            await query.edit_message_text(f"📂 <b>{category}</b>", parse_mode=ParseMode.HTML, reply_markup=get_items_menu(user_id, category, 0))
+            await safe_edit(query, text=f"📂 <b>{category}</b>", reply_markup=get_items_menu(user_id, category, 0))
             return
 
         elif data.startswith("item_"):
@@ -709,40 +727,44 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             user_settings[user_id]["subscriptions"] = subscriptions
             save_json(DATA_FILE, user_settings)
-            await query.edit_message_reply_markup(reply_markup=get_items_menu(user_id, category, page))
+            await safe_edit(query, reply_markup=get_items_menu(user_id, category, page))
             return
 
         elif data.startswith("page_"):
             parts = data.split("_")
             category = parts[1]
             page = int(parts[2])
-            await query.edit_message_reply_markup(reply_markup=get_items_menu(user_id, category, page))
+            await safe_edit(query, reply_markup=get_items_menu(user_id, category, page))
             return
 
         # === АДМИН-КНОПКИ ===
         elif data.startswith("admin_"):
             if int(user_id) not in ADMIN_IDS:
-                await query.edit_message_text("❌ Нет прав!")
+                await safe_edit(query, text="❌ Нет прав!")
                 return
             
             if data == "admin_close":
-                await query.edit_message_text("👑 Админ-панель закрыта", reply_markup=None)
+                await safe_edit(query, text="👑 Админ-панель закрыта", reply_markup=None)
                 return
             
             elif data == "admin_back":
-                await query.edit_message_text("👑 <b>Админ-панель</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_menu(chat_id))
+                await safe_edit(query, text="👑 <b>Админ-панель</b>", reply_markup=get_admin_menu(chat_id))
                 return
             
             elif data == "admin_back_to_categories":
-                await query.edit_message_text("📂 <b>Выбери категорию:</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_category_menu(context.user_data.get('admin_action', 'add')))
+                await safe_edit(
+                    query, 
+                    text="📂 <b>Выбери категорию:</b>", 
+                    reply_markup=get_admin_category_menu(context.user_data.get('admin_action', 'add'))
+                )
                 return
             
             elif data == "admin_view_subs":
                 subscriptions = group_settings.get(str(chat_id), {}).get("subscriptions", [])
                 if not subscriptions:
-                    await query.edit_message_text("📋 <b>Нет подписок</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_menu(chat_id))
+                    await safe_edit(query, text="📋 <b>Нет подписок</b>", reply_markup=get_admin_menu(chat_id))
                 else:
-                    await query.edit_message_text("📋 <b>Подписки группы</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_subscriptions_menu(chat_id))
+                    await safe_edit(query, text="📋 <b>Подписки группы</b>", reply_markup=get_admin_subscriptions_menu(chat_id))
                 return
             
             elif data == "admin_toggle_weather":
@@ -752,24 +774,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 save_json(GROUP_SETTINGS_FILE, group_settings)
                 status = "включена" if settings["weather"] else "выключена"
                 await query.answer(f"🌤️ Погода {status}")
-                await query.edit_message_reply_markup(reply_markup=get_admin_menu(chat_id))
+                await safe_edit(query, reply_markup=get_admin_menu(chat_id))
                 return
             
             elif data == "admin_add_items":
                 context.user_data['admin_action'] = 'add'
-                await query.edit_message_text("📂 <b>Выбери категорию:</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_category_menu('add'))
+                await safe_edit(query, text="📂 <b>Выбери категорию:</b>", reply_markup=get_admin_category_menu('add'))
                 return
             
             elif data == "admin_remove_items":
                 context.user_data['admin_action'] = 'remove'
-                await query.edit_message_text("📂 <b>Выбери категорию:</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_category_menu('remove'))
+                await safe_edit(query, text="📂 <b>Выбери категорию:</b>", reply_markup=get_admin_category_menu('remove'))
                 return
             
             elif data == "admin_clear_all":
                 group_settings[str(chat_id)] = {"subscriptions": [], "weather": group_settings.get(str(chat_id), {}).get("weather", False)}
                 save_json(GROUP_SETTINGS_FILE, group_settings)
                 await query.answer("🗑️ Все подписки очищены")
-                await query.edit_message_text("👑 <b>Админ-панель</b>\n\nВсе подписки очищены!", parse_mode=ParseMode.HTML, reply_markup=get_admin_menu(chat_id))
+                await safe_edit(query, text="👑 <b>Админ-панель</b>\n\nВсе подписки очищены!", reply_markup=get_admin_menu(chat_id))
                 return
             
             elif data.startswith("admin_add_") or data.startswith("admin_remove_"):
@@ -779,7 +801,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
                 if len(parts) == 3:
                     category_name = {"seed": "Семена", "crate": "Ящики", "gear": "Снаряжение"}.get(category, category)
-                    await query.edit_message_text(f"📂 <b>{category_name}</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_items_menu(chat_id, category_name, action, 0))
+                    await safe_edit(
+                        query, 
+                        text=f"📂 <b>{category_name}</b>", 
+                        reply_markup=get_admin_items_menu(chat_id, category_name, action, 0)
+                    )
                     return
                 
                 elif len(parts) >= 5:
@@ -806,7 +832,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     settings["subscriptions"] = subscriptions
                     group_settings[str(chat_id)] = settings
                     save_json(GROUP_SETTINGS_FILE, group_settings)
-                    await query.edit_message_reply_markup(reply_markup=get_admin_items_menu(chat_id, category, action, page))
+                    await safe_edit(query, reply_markup=get_admin_items_menu(chat_id, category, action, page))
                     return
             
             elif data.startswith("admin_page_"):
@@ -814,12 +840,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 action = parts[2]
                 category = parts[3]
                 page = int(parts[4])
-                await query.edit_message_reply_markup(reply_markup=get_admin_items_menu(chat_id, category, action, page))
+                await safe_edit(query, reply_markup=get_admin_items_menu(chat_id, category, action, page))
                 return
             
             elif data.startswith("admin_subs_page_"):
                 page = int(data.split("_")[3])
-                await query.edit_message_reply_markup(reply_markup=get_admin_subscriptions_menu(chat_id, page))
+                await safe_edit(query, reply_markup=get_admin_subscriptions_menu(chat_id, page))
                 return
             
             elif data.startswith("admin_unsub_"):
@@ -831,9 +857,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.answer(f"❌ {item_name} удалён")
                 
                 if settings["subscriptions"]:
-                    await query.edit_message_text("📋 <b>Подписки группы</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_subscriptions_menu(chat_id))
+                    await safe_edit(query, text="📋 <b>Подписки группы</b>", reply_markup=get_admin_subscriptions_menu(chat_id))
                 else:
-                    await query.edit_message_text("👑 <b>Админ-панель</b>", parse_mode=ParseMode.HTML, reply_markup=get_admin_menu(chat_id))
+                    await safe_edit(query, text="👑 <b>Админ-панель</b>", reply_markup=get_admin_menu(chat_id))
                 return
             
             logger.warning(f"⚠️ Неизвестный admin callback: {data}")
