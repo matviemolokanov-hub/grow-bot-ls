@@ -792,6 +792,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await query.answer()
 
+        # ===== ПРОВЕРКА ПРАВ ДЛЯ АДМИН-КНОПОК =====
+        # acat_ - выбор категории в админке
+        # pg_aitm_ - пагинация в админке
+        # aitm_ - нажатие на предмет в админке
+        # admin_ - кнопки админ-панели
+        # adm_ - кнопки админ-панели (adm_tgl_w, adm_clear, adm_close)
+        if data.startswith("admin_") or data.startswith("acat_") or data.startswith("pg_aitm_") or data.startswith("aitm_") or data.startswith("adm_"):
+            try:
+                member = await context.bot.get_chat_member(int(cid), int(uid))
+                if member.status not in ['creator', 'administrator']:
+                    await query.answer("❌ Только администраторы могут настраивать группу!")
+                    return
+            except Exception as e:
+                logger.error(f"Ошибка проверки прав для кнопки: {e}")
+                await query.answer("❌ Не удалось проверить права!")
+                return
+
+        # ===== ОБЫЧНЫЕ КНОПКИ (без проверки прав) =====
         if data == "menu":
             await safe_edit(query, "🌱 <b>Grow a Garden 2 Tracker</b>\n\nВыбери категорию, затем нажми на предмет.\n✅ — получать уведомления\n❌ — не получать", reply_markup=get_main_menu())
 
@@ -862,7 +880,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             save_json(DATA_FILE, user_settings)
             await safe_edit(query, reply_markup=get_items_menu(uid, cat, int(pg)))
 
-        # АДМИНКА
+        # ===== АДМИН-КНОПКИ (с проверкой прав выше) =====
         elif data == "admin_main":
             await safe_edit(query, "👑 <b>Админ-панель группы</b>", reply_markup=get_admin_menu(cid))
 
@@ -949,7 +967,6 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                     if not weather_topics:
                         continue
                     
-                    # Только топики (БЕЗ основного чата)
                     for thread_id in weather_topics:
                         try:
                             await context.bot.send_message(
@@ -990,7 +1007,7 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
             for name in removed:
                 save_history(name, old_stock.get(name, 0), 0)
 
-            # --- ГРУППЫ (ТОЛЬКО В ТОПИКИ, БЕЗ ОСНОВНОГО ЧАТА) ---
+            # --- ГРУППЫ (ТОЛЬКО В ТОПИКИ) ---
             logger.info(f"📢 Отправка уведомлений в топики...")
             for cid, s in group_settings.items():
                 subs = s.get("subscriptions", [])
@@ -1008,7 +1025,6 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                 if g_added or g_changed:
                     msg = format_stock_update_message(g_added, g_changed, {})
                     if msg:
-                        # Только топики (БЕЗ основного чата)
                         for thread_id in stock_topics:
                             try:
                                 await context.bot.send_message(
