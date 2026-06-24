@@ -407,6 +407,11 @@ def format_stock_update_message(added, changed, removed):
     cat_emojis = {"Семена": "🌾", "Ящики": "📦", "Снаряжение": "⚙️"}
     categories = {}
 
+    # Принудительная загрузка предметов, если они не загружены
+    if not all_items:
+        logger.warning("⚠️ all_items пуст, принудительная загрузка...")
+        load_items()
+
     for name, stock in added.items():
         info = all_items.get(name, {})
         cat = info.get('category', 'Неизвестно')
@@ -429,6 +434,7 @@ def format_stock_update_message(added, changed, removed):
         categories[cat]['removed'].append((name, info.get('rarity', 'Common')))
 
     if not categories:
+        logger.warning("⚠️ format_stock_update_message: нет категорий для отображения")
         return None
 
     msg = f"📢 <b>ОБНОВЛЕНИЕ СТОКА!</b>\n"
@@ -765,7 +771,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
 
-# ================= ФОНОВЫЕ ЗАДАЧИ (МГНОВЕННЫЕ УВЕДОМЛЕНИЯ) =================
+# ================= ФОНОВЫЕ ЗАДАЧИ =================
 async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
     global last_stock_data, last_weather_data
 
@@ -825,26 +831,37 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
             for name in removed:
                 save_history(name, last_stock_data.get(name, 0), 0)
 
-            # --- ГРУППЫ (мгновенные уведомления) ---
+            # --- ГРУППЫ (мгновенные уведомления с логированием) ---
+            logger.info(f"📢 Отправка уведомлений в группы...")
             for cid, s in group_settings.items():
                 subs = s.get("subscriptions", [])
+                logger.info(f"📋 Группа {cid}: подписок {len(subs)}")
+
                 if not subs:
+                    logger.info(f"⏭️ Группа {cid}: нет подписок, пропускаем")
                     continue
 
                 g_added = {n: s_val for n, s_val in added.items() if n in subs}
                 g_changed = {n: c for n, c in changed.items() if n in subs}
                 g_removed = {n for n in removed if n in subs}
 
+                logger.info(f"📊 Группа {cid}: добавлено {len(g_added)}, изменено {len(g_changed)}, удалено {len(g_removed)}")
+
                 if g_added or g_changed or g_removed:
                     msg = format_stock_update_message(g_added, g_changed, g_removed)
                     if msg:
                         try:
                             await context.bot.send_message(chat_id=int(cid), text=msg, parse_mode=ParseMode.HTML)
-                            logger.info(f"📢 Мгновенное уведомление о стоке отправлено в группу {cid}")
+                            logger.info(f"✅ Мгновенное уведомление о стоке отправлено в группу {cid}")
                         except Exception as e:
-                            logger.error(f"Ошибка отправки стока в {cid}: {e}")
+                            logger.error(f"❌ Ошибка отправки стока в {cid}: {e}")
+                    else:
+                        logger.warning(f"⚠️ format_stock_update_message вернул None для группы {cid}")
+                else:
+                    logger.info(f"⏭️ Группа {cid}: нет изменений по подпискам")
 
             # --- ПОЛЬЗОВАТЕЛИ (ЛС) (мгновенные уведомления) ---
+            logger.info(f"📢 Отправка уведомлений пользователям...")
             for uid, s in user_settings.items():
                 subs = s.get("subscriptions", [])
                 if not subs:
@@ -859,9 +876,9 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                     if msg:
                         try:
                             await context.bot.send_message(chat_id=int(uid), text=msg, parse_mode=ParseMode.HTML)
-                            logger.info(f"📢 Мгновенное уведомление о стоке отправлено пользователю {uid}")
+                            logger.info(f"✅ Мгновенное уведомление о стоке отправлено пользователю {uid}")
                         except Exception as e:
-                            logger.error(f"Ошибка отправки стока пользователю {uid}: {e}")
+                            logger.error(f"❌ Ошибка отправки стока пользователю {uid}: {e}")
 
         else:
             logger.info("✅ Изменений стока нет")
