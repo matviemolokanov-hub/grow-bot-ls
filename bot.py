@@ -32,7 +32,7 @@ HISTORY_FILE = os.path.join(DATA_DIR, "history.json")
 BACKUP_DIR = os.path.join(DATA_DIR, "backups")
 
 CACHE_TTL = 300
-ADMIN_IDS = [7632708290]  # ТОЛЬКО ЭТИ ID МОГУТ ИСПОЛЬЗОВАТЬ АДМИН-ПАНЕЛЬ
+ADMIN_IDS = [7632708290]
 INACTIVE_DAYS = 30
 
 # ================= ЛОГГЕР =================
@@ -187,6 +187,7 @@ last_weather_data = None
 _items_cache_time = 0
 _multipliers_cache_time = 0
 multipliers_cache = {}
+_processing = False  # Флаг для предотвращения одновременной обработки
 
 def load_items():
     global all_items, _items_cache_time
@@ -601,17 +602,14 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     logger.info(f"👑 /admin от {user_id} в чате {chat_id}")
 
-    # Проверка: команда только для групп
     if chat_id > 0:
         await update.message.reply_text("❌ Эта команда работает только в группах!")
         return
 
-    # ===== ЖЁСТКАЯ ПРОВЕРКА: ТОЛЬКО ID ИЗ СПИСКА ADMIN_IDS =====
     if user_id not in ADMIN_IDS:
         await update.message.reply_text("❌ У вас нет прав на использование админ-панели!")
         return
 
-    # Дополнительная проверка: является ли пользователь администратором группы
     try:
         member = await context.bot.get_chat_member(chat_id, user_id)
         if member.status not in ['creator', 'administrator']:
@@ -772,11 +770,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
 
-# ================= ФОНОВЫЕ ЗАДАЧИ =================
+# ================= ФОНОВЫЕ ЗАДАЧИ (ИСПРАВЛЕНЫ) =================
 async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
-    global last_stock_data, last_weather_data
+    global last_stock_data, last_weather_data, _processing
+
+    # Если уже идёт обработка, пропускаем
+    if _processing:
+        logger.info("⏭️ Пропускаем проверку, уже идёт обработка")
+        return
 
     try:
+        _processing = True
         data = fetch_with_retry(API_URL, max_retries=2, timeout=10)
         if not data:
             logger.warning("⚠️ Не удалось получить данные для проверки")
@@ -820,17 +824,23 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
             logger.info("🔄 Первый запуск, сток запомнен")
             return
 
-        added, removed, changed = get_changes(last_stock_data, new_stock)
+        # Сохраняем старый сток для сравнения
+        old_stock = last_stock_data.copy()
+        
+        added, removed, changed = get_changes(old_stock, new_stock)
         logger.info(f"📈 Изменения: +{len(added)} -{len(removed)} *{len(changed)}")
 
         if added or removed or changed:
+            # Сразу обновляем last_stock_data, чтобы предотвратить повторные отправки
+            last_stock_data = new_stock
+
             # Сохраняем историю
             for name, stock in added.items():
                 save_history(name, 0, stock)
             for name, change in changed.items():
                 save_history(name, change['old'], change['new'])
             for name in removed:
-                save_history(name, last_stock_data.get(name, 0), 0)
+                save_history(name, old_stock.get(name, 0), 0)
 
             # --- ГРУППЫ ---
             logger.info(f"📢 Отправка уведомлений в группы...")
@@ -853,7 +863,7 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                     if msg:
                         try:
                             await context.bot.send_message(chat_id=int(cid), text=msg, parse_mode=ParseMode.HTML)
-                            logger.info(f"✅ Мгновенное уведомление о стоке отправлено в группу {cid}")
+                            logger.info(f"✅ Уведомление о стоке отправлено в группу {cid}")
                         except Exception as e:
                             logger.error(f"❌ Ошибка отправки стока в {cid}: {e}")
                     else:
@@ -877,14 +887,14 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                     if msg:
                         try:
                             await context.bot.send_message(chat_id=int(uid), text=msg, parse_mode=ParseMode.HTML)
-                            logger.info(f"✅ Мгновенное уведомление о стоке отправлено пользователю {uid}")
+                            logger.info(f"✅ Уведомление о стоке отправлено пользователю {uid}")
                         except Exception as e:
                             logger.error(f"❌ Ошибка отправки стока пользователю {uid}: {e}")
 
         else:
             logger.info("✅ Изменений стока нет")
-
-        last_stock_data = new_stock
+            # Обновляем last_stock_data даже если изменений нет
+            last_stock_data = new_stock
 
         # ===== РЕЗЕРВНОЕ КОПИРОВАНИЕ =====
         backup_file = os.path.join(BACKUP_DIR, f"backup_{get_msk_time().strftime('%Y-%m-%d')}.json")
@@ -898,6 +908,8 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Ошибка в check_and_notify: {e}")
         traceback.print_exc()
+    finally:
+        _processing = False
 
 async def update_predictions_job(context: ContextTypes.DEFAULT_TYPE):
     try:
