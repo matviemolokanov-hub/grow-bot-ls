@@ -27,9 +27,12 @@ GROUP_SETTINGS_FILE = os.path.join(DATA_DIR, "group_settings.json")
 ITEMS_CACHE_FILE = os.path.join(DATA_DIR, "items_cache.json")
 PREDICT_MESSAGES_FILE = os.path.join(DATA_DIR, "predict_messages.json")
 MULTIPLIER_MESSAGES_FILE = os.path.join(DATA_DIR, "multiplier_messages.json")
+HISTORY_FILE = os.path.join(DATA_DIR, "history.json")
+BACKUP_DIR = os.path.join(DATA_DIR, "backups")
 
 CACHE_TTL = 300
 ADMIN_IDS = [7632708290]
+INACTIVE_DAYS = 30
 
 # ================= ЛОГГЕР =================
 logging.basicConfig(
@@ -68,6 +71,17 @@ def format_timestamp(ts):
         return "—"
     return datetime.fromtimestamp(ts, timezone(timedelta(hours=3))).strftime('%H:%M:%S')
 
+def format_timestamp_with_date(ts):
+    """Форматирует время с датой: 'сегодня в 21:58:00' или '24.06 21:58:00'"""
+    if not ts or ts == 0:
+        return "—"
+    dt = datetime.fromtimestamp(ts, timezone(timedelta(hours=3)))
+    now = get_msk_time()
+    if dt.date() == now.date():
+        return f"сегодня в {dt.strftime('%H:%M:%S')}"
+    else:
+        return dt.strftime('%d.%m %H:%M:%S')
+
 def load_json(filename, default=None):
     try:
         if os.path.exists(filename):
@@ -87,6 +101,82 @@ def save_json(filename, data):
     except Exception as e:
         logger.error(f"Ошибка сохранения {filename}: {e}")
         return False
+
+def fetch_with_retry(url, max_retries=3, timeout=10):
+    """Запрос к API с повторными попытками"""
+    for attempt in range(max_retries):
+        try:
+            resp = requests.get(url, timeout=timeout)
+            if resp.status_code == 200:
+                return resp.json()
+            logger.warning(f"⚠️ API вернул {resp.status_code}, попытка {attempt+1}/{max_retries}")
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка запроса: {e}, попытка {attempt+1}/{max_retries}")
+            time.sleep(2 ** attempt)
+    return None
+
+def backup_data():
+    """Создание резервной копии настроек"""
+    try:
+        os.makedirs(BACKUP_DIR, exist_ok=True)
+        date = get_msk_time().strftime('%Y-%m-%d')
+        files = [DATA_FILE, GROUP_SETTINGS_FILE]
+        for f in files:
+            if os.path.exists(f):
+                backup_file = os.path.join(BACKUP_DIR, f"{os.path.basename(f)}_{date}.json")
+                import shutil
+                shutil.copy(f, backup_file)
+        logger.info(f"💾 Создана резервная копия от {date}")
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка создания резервной копии: {e}")
+        return False
+
+def clean_inactive_users():
+    """Удаление неактивных пользователей"""
+    try:
+        removed = 0
+        for uid, s in list(user_settings.items()):
+            if 'last_active' in s:
+                if time.time() - s['last_active'] > INACTIVE_DAYS * 24 * 3600:
+                    del user_settings[uid]
+                    removed += 1
+            else:
+                # Если нет last_active, добавляем сейчас и пропускаем
+                user_settings[uid]['last_active'] = time.time()
+        if removed > 0:
+            save_json(DATA_FILE, user_settings)
+            logger.info(f"🧹 Удалено неактивных пользователей: {removed}")
+        return removed
+    except Exception as e:
+        logger.error(f"Ошибка очистки пользователей: {e}")
+        return 0
+
+def save_history(item, old_stock, new_stock):
+    """Сохранение истории изменений стока"""
+    try:
+        history = load_json(HISTORY_FILE, {})
+        if item not in history:
+            history[item] = []
+        history[item].append({
+            'time': get_msk_time().isoformat(),
+            'old': old_stock,
+            'new': new_stock
+        })
+        # Храним последние 20 записей
+        history[item] = history[item][-20:]
+        save_json(HISTORY_FILE, history)
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка сохранения истории для {item}: {e}")
+        return False
+
+def get_item_history(item, limit=10):
+    """Получение истории изменений предмета"""
+    history = load_json(HISTORY_FILE, {})
+    if item not in history:
+        return []
+    return history[item][-limit:]
 
 async def safe_edit(query, text=None, reply_markup=None):
     try:
@@ -109,6 +199,10 @@ all_items = {}
 last_stock_data = None
 last_weather_data = None
 _items_cache_time = 0
+_multipliers_cache_time = 0
+multipliers_cache = {}
+_pending_changes = {}  # Буфер изменений для групповых уведомлений
+_last_notify_time = {}  # Время последней отправки уведомлений
 
 def load_items():
     global all_items, _items_cache_time
@@ -121,48 +215,46 @@ def load_items():
         _items_cache_time = cached['timestamp']
         return all_items
 
-    try:
-        resp = requests.get(API_URL, timeout=10)
-        if resp.status_code == 200:
-            data = resp.json()
-            new_items = {}
-            mapping = {"SeedShop_Normal": "Семена", "CrateShop": "Ящики", "GearShop": "Снаряжение"}
-            for shop_key, cat_name in mapping.items():
-                for item in data.get("shops", {}).get(shop_key, []):
-                    name = item.get('name')
-                    if name:
-                        new_items[name] = {
-                            'name': name,
-                            'rarity': item.get('rarity', 'Common'),
-                            'category': cat_name
-                        }
-            all_items = new_items
-            _items_cache_time = time.time()
-            save_json(ITEMS_CACHE_FILE, {'items': all_items, 'timestamp': _items_cache_time})
-            logger.info(f"Загружено предметов: {len(all_items)}")
-    except Exception as e:
-        logger.error(f"Ошибка загрузки предметов: {e}")
+    data = fetch_with_retry(API_URL)
+    if data:
+        new_items = {}
+        mapping = {"SeedShop_Normal": "Семена", "CrateShop": "Ящики", "GearShop": "Снаряжение"}
+        for shop_key, cat_name in mapping.items():
+            for item in data.get("shops", {}).get(shop_key, []):
+                name = item.get('name')
+                if name:
+                    new_items[name] = {
+                        'name': name,
+                        'rarity': item.get('rarity', 'Common'),
+                        'category': cat_name
+                    }
+        all_items = new_items
+        _items_cache_time = time.time()
+        save_json(ITEMS_CACHE_FILE, {'items': all_items, 'timestamp': _items_cache_time})
+        logger.info(f"Загружено предметов: {len(all_items)}")
+    else:
+        logger.warning("⚠️ Не удалось загрузить предметы, используется кеш")
     return all_items
 
 def get_multipliers():
-    try:
-        resp = requests.get(API_URL, timeout=10)
-        if resp.status_code == 200:
-            mults = resp.json().get('fruitMultipliers', [])
-            mults.sort(key=lambda x: x.get('multiplier', 0), reverse=True)
-            return mults
-    except Exception as e:
-        logger.error(f"Ошибка получения мультипликаторов: {e}")
-    return []
+    global multipliers_cache, _multipliers_cache_time
+    if time.time() - _multipliers_cache_time < CACHE_TTL and multipliers_cache:
+        return multipliers_cache
+
+    data = fetch_with_retry(API_URL)
+    if data:
+        mults = data.get('fruitMultipliers', [])
+        mults.sort(key=lambda x: x.get('multiplier', 0), reverse=True)
+        multipliers_cache = mults
+        _multipliers_cache_time = time.time()
+        logger.info(f"Мультипликаторы обновлены: {len(mults)}")
+        return mults
+    else:
+        logger.warning("⚠️ Не удалось загрузить мультипликаторы")
+    return multipliers_cache
 
 def get_predictions_data():
-    try:
-        resp = requests.get(PREDICT_URL, timeout=10)
-        if resp.status_code == 200 and resp.text:
-            return resp.json()
-    except Exception as e:
-        logger.error(f"Ошибка получения предсказаний: {e}")
-    return None
+    return fetch_with_retry(PREDICT_URL, max_retries=3, timeout=10)
 
 # ================= ФОРМАТИРОВАНИЕ СООБЩЕНИЙ =================
 def format_predict_msg(data):
@@ -173,7 +265,7 @@ def format_predict_msg(data):
     msg = f"🔮 <b>ПРЕДСКАЗАНИЯ</b>\n🔄 <i>Обновлено: {msk_time} МСК</i>\n"
     msg += "═" * 30 + "\n\n"
 
-    # Лунные фазы
+    # Лунные фазы (с датой)
     weathers = sorted([w for w in data.get('weathers', []) if w.get('timestamp', 0) > now], key=lambda x: x['timestamp'])[:10]
     if weathers:
         msg += "🌙 <b>ЛУННЫЕ ФАЗЫ</b>\n"
@@ -181,7 +273,7 @@ def format_predict_msg(data):
             name = w.get('name', 'Неизвестно')
             ts = w.get('timestamp', 0)
             info = WEATHER_TYPES.get(name, {"emoji": "🌙", "name": name})
-            time_str = format_timestamp(ts)
+            time_str = format_timestamp_with_date(ts)
             minutes_left = int((ts - now) / 60)
             if minutes_left > 0:
                 msg += f"  {info['emoji']} {info['name']} — {time_str} (через {minutes_left} мин.)\n"
@@ -217,7 +309,7 @@ def format_predict_msg(data):
         for i in upcoming:
             name = i.get('name', 'Неизвестно')
             ts = i.get('timestamp', 0)
-            time_str = format_timestamp(ts)
+            time_str = format_timestamp_with_date(ts)
             minutes_left = int((ts - now) / 60)
             msg += f"    • {name} — {time_str}" + (f" (через {minutes_left} мин.)" if minutes_left > 0 else "") + "\n"
         msg += "\n"
@@ -229,7 +321,7 @@ def format_predict_msg(data):
         for i in past:
             name = i.get('name', 'Неизвестно')
             ts = i.get('timestamp', 0)
-            msg += f"    • {name} — {format_timestamp(ts)}\n"
+            msg += f"    • {name} — {format_timestamp_with_date(ts)}\n"
     else:
         msg += "  🕐 <b>БЫЛИ В СТОКЕ:</b> Нет\n"
 
@@ -312,7 +404,9 @@ def get_stock_signature(data):
     signature = {}
     for shop_type in ["SeedShop_Normal", "CrateShop", "GearShop"]:
         for item in data.get("shops", {}).get(shop_type, []):
-            signature[item.get('name')] = item.get('stock', 0)
+            stock = item.get('stock', 0)
+            if stock > 0:
+                signature[item.get('name')] = stock
     return signature
 
 def get_changes(old, new):
@@ -448,9 +542,7 @@ def get_subscriptions_menu(user_id, page=0):
     keyboard.append([InlineKeyboardButton("🔙 Главное меню", callback_data="menu")])
     return InlineKeyboardMarkup(keyboard)
 
-# ================= КОНЕЦ ПЕРВОЙ ЧАСТИ =================
-    # ================= НАЧАЛО ВТОРОЙ ЧАСТИ (КОМАНДЫ) =================
-
+# ================= КОМАНДЫ =================
 async def predict_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
     logger.info(f"🔮 /predict от {chat_id}")
@@ -474,9 +566,8 @@ async def multipliers_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"🌤️ /weather от {update.effective_user.id}")
     try:
-        resp = requests.get(API_URL, timeout=10)
-        if resp.status_code == 200:
-            data = resp.json()
+        data = fetch_with_retry(API_URL)
+        if data:
             weather_type = get_weather_type(data)
             weather = data.get('weather', {})
             weathers = weather.get('weathers', {})
@@ -502,7 +593,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"🚀 /start от {uid}")
     if uid not in user_settings:
         user_settings[uid] = {"subscriptions": []}
-        save_json(DATA_FILE, user_settings)
+    # Обновляем время последней активности
+    user_settings[uid]['last_active'] = time.time()
+    save_json(DATA_FILE, user_settings)
     load_items()
     await update.message.reply_text(
         "🌱 <b>Grow a Garden 2 Tracker</b>\n\n"
@@ -568,10 +661,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         elif data == "full_stock":
             try:
-                r = requests.get(API_URL, timeout=10)
-                if r.status_code == 200:
-                    r_json = r.json()
-                    msg = format_full_stock_message(r_json)
+                data_api = fetch_with_retry(API_URL)
+                if data_api:
+                    msg = format_full_stock_message(data_api)
                     await safe_edit(query, msg, reply_markup=get_main_menu())
                 else:
                     await safe_edit(query, "❌ Ошибка API", reply_markup=get_main_menu())
@@ -679,36 +771,50 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
 
-# ================= ФОНОВЫЕ ЗАДАЧИ (ИСПРАВЛЕННЫЕ) =================
+# ================= ФОНОВЫЕ ЗАДАЧИ =================
 async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
-    global last_stock_data, last_weather_data
+    global last_stock_data, last_weather_data, _pending_changes, _last_notify_time
+
     try:
-        resp = requests.get(API_URL, timeout=10)
-        if resp.status_code != 200:
-            logger.warning(f"⚠️ API вернул {resp.status_code}")
+        data = fetch_with_retry(API_URL, max_retries=2, timeout=10)
+        if not data:
+            logger.warning("⚠️ Не удалось получить данные для проверки")
             return
-        data = resp.json()
+
         logger.info("🔍 Проверка стока и погоды...")
 
-        # ---- Погода ----
+        # ===== ПОГОДА =====
         new_w = get_weather_type(data)
-        if last_weather_data is not None and new_w != last_weather_data:
-            msg = format_weather_message(new_w)
-            for cid, s in group_settings.items():
-                if s.get("weather"):
-                    try:
-                        await context.bot.send_message(chat_id=int(cid), text=msg, parse_mode=ParseMode.HTML)
-                        logger.info(f"🌤️ Погода отправлена в {cid}")
-                    except Exception as e:
-                        logger.error(f"Ошибка отправки погоды в {cid}: {e}")
+        weather_name = WEATHER_TYPES.get(new_w, {}).get('name', new_w)
+        logger.info(f"🌤️ Текущая погода: {weather_name} (ключ: {new_w})")
+
+        if last_weather_data is not None:
+            if new_w != last_weather_data:
+                old_name = WEATHER_TYPES.get(last_weather_data, {}).get('name', last_weather_data)
+                logger.info(f"🔄 Погода изменилась: {old_name} → {weather_name}")
+                msg = format_weather_message(new_w)
+                sent_count = 0
+                for cid, s in group_settings.items():
+                    if s.get("weather"):
+                        try:
+                            await context.bot.send_message(chat_id=int(cid), text=msg, parse_mode=ParseMode.HTML)
+                            sent_count += 1
+                            logger.info(f"🌤️ Уведомление о погоде отправлено в группу {cid}")
+                        except Exception as e:
+                            logger.error(f"Ошибка отправки погоды в {cid}: {e}")
+                if sent_count == 0:
+                    logger.info("🌤️ Нет групп с включёнными уведомлениями о погоде")
+            else:
+                logger.info("🌤️ Погода не изменилась")
+        else:
+            logger.info("🌤️ Первый запуск, погода запомнена")
         last_weather_data = new_w
 
-        # ---- Сток ----
+        # ===== СТОК =====
         new_stock = get_stock_signature(data)
-        logger.info(f"📊 Новый сток: {len(new_stock)} позиций")
+        logger.info(f"📊 Новый сток (положительные позиции): {len(new_stock)}")
 
         if last_stock_data is None:
-            # Первый запуск – просто запоминаем
             last_stock_data = new_stock
             logger.info("🔄 Первый запуск, сток запомнен")
             return
@@ -717,28 +823,42 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"📈 Изменения: +{len(added)} -{len(removed)} *{len(changed)}")
 
         if added or removed or changed:
-            logger.info("🔔 Есть изменения, готовим уведомления")
+            # Сохраняем историю
+            for name, stock in added.items():
+                save_history(name, 0, stock)
+            for name, change in changed.items():
+                save_history(name, change['old'], change['new'])
+            for name in removed:
+                save_history(name, last_stock_data.get(name, 0), 0)
 
-            # --- Группы ---
+            # Буферизация изменений для групповых уведомлений
+            current_time = time.time()
             for cid, s in group_settings.items():
                 subs = s.get("subscriptions", [])
                 if not subs:
                     continue
+
+                # Собираем изменения для этой группы
                 g_added = {n: s_val for n, s_val in added.items() if n in subs}
                 g_changed = {n: c for n, c in changed.items() if n in subs}
                 g_removed = {n for n in removed if n in subs}
-                if g_added or g_changed or g_removed:
-                    msg = format_stock_update_message(g_added, g_changed, g_removed)
-                    if msg:
-                        try:
-                            await context.bot.send_message(chat_id=int(cid), text=msg, parse_mode=ParseMode.HTML)
-                            logger.info(f"📢 Сток отправлен в группу {cid} (изменений: {len(g_added)+len(g_changed)+len(g_removed)})")
-                        except Exception as e:
-                            logger.error(f"Ошибка отправки стока в {cid}: {e}")
-                    else:
-                        logger.warning(f"⚠️ format_stock_update_message вернул None для группы {cid}")
 
-            # --- Пользователи (ЛС) ---
+                if g_added or g_changed or g_removed:
+                    # Добавляем в буфер
+                    if cid not in _pending_changes:
+                        _pending_changes[cid] = {'added': {}, 'changed': {}, 'removed': set()}
+                    # Объединяем изменения
+                    for n, s_val in g_added.items():
+                        _pending_changes[cid]['added'][n] = s_val
+                    for n, c in g_changed.items():
+                        _pending_changes[cid]['changed'][n] = c
+                    for n in g_removed:
+                        _pending_changes[cid]['removed'].add(n)
+
+                    # Обновляем время последнего изменения
+                    _last_notify_time[cid] = current_time
+
+            # Отправляем уведомления пользователям сразу
             for uid, s in user_settings.items():
                 subs = s.get("subscriptions", [])
                 if not subs:
@@ -751,20 +871,49 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                     if msg:
                         try:
                             await context.bot.send_message(chat_id=int(uid), text=msg, parse_mode=ParseMode.HTML)
-                            logger.info(f"📢 Сток отправлен пользователю {uid} (изменений: {len(u_added)+len(u_changed)+len(u_removed)})")
+                            logger.info(f"📢 Сток отправлен пользователю {uid}")
                         except Exception as e:
                             logger.error(f"Ошибка отправки стока пользователю {uid}: {e}")
-                    else:
-                        logger.warning(f"⚠️ format_stock_update_message вернул None для пользователя {uid}")
-
-        else:
-            logger.info("✅ Изменений стока нет")
 
         last_stock_data = new_stock
+
+        # ===== РЕЗЕРВНОЕ КОПИРОВАНИЕ (раз в день) =====
+        backup_file = os.path.join(BACKUP_DIR, f"backup_{get_msk_time().strftime('%Y-%m-%d')}.json")
+        if not os.path.exists(backup_file):
+            backup_data()
+
+        # ===== ОЧИСТКА НЕАКТИВНЫХ ПОЛЬЗОВАТЕЛЕЙ (раз в неделю) =====
+        if get_msk_time().weekday() == 0 and get_msk_time().hour == 3:
+            clean_inactive_users()
 
     except Exception as e:
         logger.error(f"Ошибка в check_and_notify: {e}")
         traceback.print_exc()
+
+async def send_buffered_notifications(context: ContextTypes.DEFAULT_TYPE):
+    """Отправка буферизированных уведомлений группам (раз в 2 минуты)"""
+    global _pending_changes, _last_notify_time
+
+    current_time = time.time()
+    for cid, last_time in list(_last_notify_time.items()):
+        # Если прошло больше 2 минут с последнего изменения
+        if current_time - last_time > 120:
+            if cid in _pending_changes:
+                changes = _pending_changes[cid]
+                msg = format_stock_update_message(
+                    changes['added'],
+                    changes['changed'],
+                    changes['removed']
+                )
+                if msg:
+                    try:
+                        await context.bot.send_message(chat_id=int(cid), text=msg, parse_mode=ParseMode.HTML)
+                        logger.info(f"📢 Буферизированный сток отправлен в группу {cid}")
+                    except Exception as e:
+                        logger.error(f"Ошибка отправки буферизированного стока в {cid}: {e}")
+                # Очищаем буфер
+                del _pending_changes[cid]
+                del _last_notify_time[cid]
 
 async def update_predictions_job(context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -783,6 +932,10 @@ async def update_predictions_job(context: ContextTypes.DEFAULT_TYPE):
 
 async def update_multipliers_job(context: ContextTypes.DEFAULT_TYPE):
     try:
+        # Принудительно обновляем кеш
+        global multipliers_cache, _multipliers_cache_time
+        multipliers_cache = {}
+        _multipliers_cache_time = 0
         msg = format_multipliers_message()
         for cid, mid in list(multiplier_messages.items()):
             try:
@@ -796,6 +949,10 @@ async def update_multipliers_job(context: ContextTypes.DEFAULT_TYPE):
 # ================= ЗАПУСК =================
 def main():
     logger.info("🚀 Запуск бота...")
+
+    # Создаём папку для бэкапов
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+
     # Очистка вебхука
     try:
         r = requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
@@ -826,9 +983,18 @@ def main():
 
     # Фоновые задачи
     try:
+        # Основная проверка (сток + погода)
         app.job_queue.run_repeating(check_and_notify, interval=10, first=5)
+
+        # Отправка буферизированных уведомлений группам (раз в 2 минуты)
+        app.job_queue.run_repeating(send_buffered_notifications, interval=120, first=60)
+
+        # Обновление предсказаний
         app.job_queue.run_repeating(update_predictions_job, interval=30, first=10)
+
+        # Обновление мультипликаторов
         app.job_queue.run_repeating(update_multipliers_job, interval=60, first=15)
+
         logger.info("✅ Фоновые задачи запущены")
     except Exception as e:
         logger.error(f"❌ Ошибка запуска фоновых задач: {e}")
