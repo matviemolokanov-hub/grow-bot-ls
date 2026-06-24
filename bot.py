@@ -622,7 +622,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     cid_s = str(chat_id)
     if cid_s not in group_settings:
-        group_settings[cid_s] = {"subscriptions": [], "weather": False}
+        group_settings[cid_s] = {"subscriptions": [], "weather": False, "stock_topics": [], "weather_topics": []}
         save_json(GROUP_SETTINGS_FILE, group_settings)
 
     await update.message.reply_text(
@@ -634,6 +634,151 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.HTML,
         reply_markup=get_admin_menu(chat_id)
     )
+
+# ================= КОМАНДЫ ДЛЯ ТОПИКОВ =================
+async def start_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Включить уведомления о стоке в топик"""
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    thread_id = update.effective_message.message_thread_id
+    
+    if chat_id > 0:
+        await update.message.reply_text("❌ Эта команда работает только в группах с топиками!")
+        return
+    
+    if not thread_id:
+        await update.message.reply_text("❌ Эта команда должна быть вызвана в топике!")
+        return
+    
+    try:
+        member = await context.bot.get_chat_member(chat_id, user_id)
+        if member.status not in ['creator', 'administrator']:
+            await update.message.reply_text("❌ Только администраторы группы могут настраивать уведомления в топиках!")
+            return
+    except Exception as e:
+        logger.error(f"Ошибка проверки прав: {e}")
+        await update.message.reply_text("❌ Не удалось проверить ваши права!")
+        return
+    
+    cid_s = str(chat_id)
+    if cid_s not in group_settings:
+        group_settings[cid_s] = {"subscriptions": [], "weather": False, "stock_topics": [], "weather_topics": []}
+    
+    if "stock_topics" not in group_settings[cid_s]:
+        group_settings[cid_s]["stock_topics"] = []
+    
+    if thread_id not in group_settings[cid_s]["stock_topics"]:
+        group_settings[cid_s]["stock_topics"].append(thread_id)
+        save_json(GROUP_SETTINGS_FILE, group_settings)
+        await update.message.reply_text(
+            f"✅ Этот топик добавлен для уведомлений о СТОКЕ!\n\n"
+            f"📌 Теперь все уведомления о стоке будут приходить сюда.\n"
+            f"🆔 ID топика: `{thread_id}`",
+            parse_mode=ParseMode.HTML
+        )
+    else:
+        await update.message.reply_text("ℹ️ Этот топик уже добавлен для уведомлений о стоке!")
+
+async def stop_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отключить уведомления о стоке в топике"""
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    thread_id = update.effective_message.message_thread_id
+    
+    if chat_id > 0 or not thread_id:
+        await update.message.reply_text("❌ Эта команда работает только в топиках групп!")
+        return
+    
+    try:
+        member = await context.bot.get_chat_member(chat_id, user_id)
+        if member.status not in ['creator', 'administrator']:
+            await update.message.reply_text("❌ Только администраторы могут управлять этим!")
+            return
+    except:
+        pass
+    
+    cid_s = str(chat_id)
+    if cid_s in group_settings and "stock_topics" in group_settings[cid_s]:
+        if thread_id in group_settings[cid_s]["stock_topics"]:
+            group_settings[cid_s]["stock_topics"].remove(thread_id)
+            save_json(GROUP_SETTINGS_FILE, group_settings)
+            await update.message.reply_text("✅ Этот топик удалён из уведомлений о стоке!")
+        else:
+            await update.message.reply_text("ℹ️ Этот топик не был добавлен для уведомлений о стоке")
+    else:
+        await update.message.reply_text("ℹ️ Нет настроек для этого топика")
+
+async def start_weather_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Включить уведомления о погоде в топик"""
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    thread_id = update.effective_message.message_thread_id
+    
+    if chat_id > 0:
+        await update.message.reply_text("❌ Эта команда работает только в группах с топиками!")
+        return
+    
+    if not thread_id:
+        await update.message.reply_text("❌ Эта команда должна быть вызвана в топике!")
+        return
+    
+    try:
+        member = await context.bot.get_chat_member(chat_id, user_id)
+        if member.status not in ['creator', 'administrator']:
+            await update.message.reply_text("❌ Только администраторы группы могут настраивать уведомления в топиках!")
+            return
+    except Exception as e:
+        logger.error(f"Ошибка проверки прав: {e}")
+        await update.message.reply_text("❌ Не удалось проверить ваши права!")
+        return
+    
+    cid_s = str(chat_id)
+    if cid_s not in group_settings:
+        group_settings[cid_s] = {"subscriptions": [], "weather": False, "stock_topics": [], "weather_topics": []}
+    
+    if "weather_topics" not in group_settings[cid_s]:
+        group_settings[cid_s]["weather_topics"] = []
+    
+    if thread_id not in group_settings[cid_s]["weather_topics"]:
+        group_settings[cid_s]["weather_topics"].append(thread_id)
+        save_json(GROUP_SETTINGS_FILE, group_settings)
+        await update.message.reply_text(
+            f"✅ Этот топик добавлен для уведомлений о ПОГОДЕ!\n\n"
+            f"🌤️ Теперь все уведомления о погоде будут приходить сюда.\n"
+            f"🆔 ID топика: `{thread_id}`",
+            parse_mode=ParseMode.HTML
+        )
+    else:
+        await update.message.reply_text("ℹ️ Этот топик уже добавлен для уведомлений о погоде!")
+
+async def stop_weather_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отключить уведомления о погоде в топике"""
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    thread_id = update.effective_message.message_thread_id
+    
+    if chat_id > 0 or not thread_id:
+        await update.message.reply_text("❌ Эта команда работает только в топиках групп!")
+        return
+    
+    try:
+        member = await context.bot.get_chat_member(chat_id, user_id)
+        if member.status not in ['creator', 'administrator']:
+            await update.message.reply_text("❌ Только администраторы могут управлять этим!")
+            return
+    except:
+        pass
+    
+    cid_s = str(chat_id)
+    if cid_s in group_settings and "weather_topics" in group_settings[cid_s]:
+        if thread_id in group_settings[cid_s]["weather_topics"]:
+            group_settings[cid_s]["weather_topics"].remove(thread_id)
+            save_json(GROUP_SETTINGS_FILE, group_settings)
+            await update.message.reply_text("✅ Этот топик удалён из уведомлений о погоде!")
+        else:
+            await update.message.reply_text("ℹ️ Этот топик не был добавлен для уведомлений о погоде")
+    else:
+        await update.message.reply_text("ℹ️ Нет настроек для этого топика")
 
 # ================= ОБРАБОТЧИК КНОПОК =================
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -787,7 +932,7 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
 
         logger.info("🔍 Проверка стока и погоды...")
 
-        # ===== ПОГОДА =====
+        # ===== ПОГОДА (ТОЛЬКО В ТОПИКИ) =====
         new_w = get_weather_type(data)
         weather_name = WEATHER_TYPES.get(new_w, {}).get('name', new_w)
         logger.info(f"🌤️ Текущая погода: {weather_name} (ключ: {new_w})")
@@ -797,17 +942,25 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                 old_name = WEATHER_TYPES.get(last_weather_data, {}).get('name', last_weather_data)
                 logger.info(f"🔄 Погода изменилась: {old_name} → {weather_name}")
                 msg = format_weather_message(new_w)
-                sent_count = 0
+                
                 for cid, s in group_settings.items():
-                    if s.get("weather"):
+                    weather_topics = s.get("weather_topics", [])
+                    
+                    if not weather_topics:
+                        continue
+                    
+                    # Только топики (БЕЗ основного чата)
+                    for thread_id in weather_topics:
                         try:
-                            await context.bot.send_message(chat_id=int(cid), text=msg, parse_mode=ParseMode.HTML)
-                            sent_count += 1
-                            logger.info(f"🌤️ Уведомление о погоде отправлено в группу {cid}")
+                            await context.bot.send_message(
+                                chat_id=int(cid),
+                                message_thread_id=thread_id,
+                                text=msg,
+                                parse_mode=ParseMode.HTML
+                            )
+                            logger.info(f"🌤️ Погода отправлена в топик {thread_id} группы {cid}")
                         except Exception as e:
-                            logger.error(f"Ошибка отправки погоды в {cid}: {e}")
-                if sent_count == 0:
-                    logger.info("🌤️ Нет групп с включёнными уведомлениями о погоде")
+                            logger.error(f"❌ Ошибка отправки погоды в топик {thread_id}: {e}")
             else:
                 logger.info("🌤️ Погода не изменилась")
         else:
@@ -837,14 +990,14 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
             for name in removed:
                 save_history(name, old_stock.get(name, 0), 0)
 
-            # --- ГРУППЫ (ТОЛЬКО ПОЯВЛЕНИЕ И ИЗМЕНЕНИЕ) ---
-            logger.info(f"📢 Отправка уведомлений в группы...")
+            # --- ГРУППЫ (ТОЛЬКО В ТОПИКИ, БЕЗ ОСНОВНОГО ЧАТА) ---
+            logger.info(f"📢 Отправка уведомлений в топики...")
             for cid, s in group_settings.items():
                 subs = s.get("subscriptions", [])
-                logger.info(f"📋 Группа {cid}: подписок {len(subs)}")
-
-                if not subs:
-                    logger.info(f"⏭️ Группа {cid}: нет подписок, пропускаем")
+                stock_topics = s.get("stock_topics", [])
+                
+                if not subs or not stock_topics:
+                    logger.info(f"⏭️ Группа {cid}: нет подписок или топиков, пропускаем")
                     continue
 
                 g_added = {n: s_val for n, s_val in added.items() if n in subs}
@@ -855,17 +1008,24 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                 if g_added or g_changed:
                     msg = format_stock_update_message(g_added, g_changed, {})
                     if msg:
-                        try:
-                            await context.bot.send_message(chat_id=int(cid), text=msg, parse_mode=ParseMode.HTML)
-                            logger.info(f"✅ Уведомление о стоке отправлено в группу {cid}")
-                        except Exception as e:
-                            logger.error(f"❌ Ошибка отправки стока в {cid}: {e}")
+                        # Только топики (БЕЗ основного чата)
+                        for thread_id in stock_topics:
+                            try:
+                                await context.bot.send_message(
+                                    chat_id=int(cid),
+                                    message_thread_id=thread_id,
+                                    text=msg,
+                                    parse_mode=ParseMode.HTML
+                                )
+                                logger.info(f"✅ Уведомление о стоке отправлено в топик {thread_id} группы {cid}")
+                            except Exception as e:
+                                logger.error(f"❌ Ошибка отправки стока в топик {thread_id}: {e}")
                     else:
                         logger.warning(f"⚠️ format_stock_update_message вернул None для группы {cid}")
                 else:
                     logger.info(f"⏭️ Группа {cid}: нет изменений по подпискам")
 
-            # --- ПОЛЬЗОВАТЕЛИ ---
+            # --- ПОЛЬЗОВАТЕЛИ (ЛС) ---
             logger.info(f"📢 Отправка уведомлений пользователям...")
             for uid, s in user_settings.items():
                 subs = s.get("subscriptions", [])
@@ -964,6 +1124,10 @@ def main():
     app.add_handler(CommandHandler("weather", weather_command))
     app.add_handler(CommandHandler("predict", predict_command))
     app.add_handler(CommandHandler("multipliers", multipliers_command))
+    app.add_handler(CommandHandler("start_topic", start_topic))
+    app.add_handler(CommandHandler("stop_topic", stop_topic))
+    app.add_handler(CommandHandler("start_weather_topic", start_weather_topic))
+    app.add_handler(CommandHandler("stop_weather_topic", stop_weather_topic))
     app.add_handler(CallbackQueryHandler(button_handler))
 
     # Фоновые задачи
@@ -975,7 +1139,7 @@ def main():
     except Exception as e:
         logger.error(f"❌ Ошибка запуска фоновых задач: {e}")
 
-    logger.info("✅ Бот запущен! Доступны команды: /start, /admin, /weather, /predict, /multipliers")
+    logger.info("✅ Бот запущен! Доступны команды: /start, /admin, /weather, /predict, /multipliers, /start_topic, /stop_topic, /start_weather_topic, /stop_weather_topic")
 
     try:
         app.run_polling(
