@@ -187,7 +187,7 @@ last_weather_data = None
 _items_cache_time = 0
 _multipliers_cache_time = 0
 multipliers_cache = {}
-_processing = False  # Флаг для предотвращения одновременной обработки
+_processing = False
 
 def load_items():
     global all_items, _items_cache_time
@@ -770,11 +770,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
 
-# ================= ФОНОВЫЕ ЗАДАЧИ (ИСПРАВЛЕНЫ) =================
+# ================= ФОНОВЫЕ ЗАДАЧИ =================
 async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
     global last_stock_data, last_weather_data, _processing
 
-    # Если уже идёт обработка, пропускаем
     if _processing:
         logger.info("⏭️ Пропускаем проверку, уже идёт обработка")
         return
@@ -824,17 +823,13 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
             logger.info("🔄 Первый запуск, сток запомнен")
             return
 
-        # Сохраняем старый сток для сравнения
         old_stock = last_stock_data.copy()
-        
         added, removed, changed = get_changes(old_stock, new_stock)
         logger.info(f"📈 Изменения: +{len(added)} -{len(removed)} *{len(changed)}")
 
         if added or removed or changed:
-            # Сразу обновляем last_stock_data, чтобы предотвратить повторные отправки
             last_stock_data = new_stock
 
-            # Сохраняем историю
             for name, stock in added.items():
                 save_history(name, 0, stock)
             for name, change in changed.items():
@@ -842,7 +837,7 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
             for name in removed:
                 save_history(name, old_stock.get(name, 0), 0)
 
-            # --- ГРУППЫ ---
+            # --- ГРУППЫ (ТОЛЬКО ПОЯВЛЕНИЕ И ИЗМЕНЕНИЕ) ---
             logger.info(f"📢 Отправка уведомлений в группы...")
             for cid, s in group_settings.items():
                 subs = s.get("subscriptions", [])
@@ -854,12 +849,11 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
 
                 g_added = {n: s_val for n, s_val in added.items() if n in subs}
                 g_changed = {n: c for n, c in changed.items() if n in subs}
-                g_removed = {n for n in removed if n in subs}
 
-                logger.info(f"📊 Группа {cid}: добавлено {len(g_added)}, изменено {len(g_changed)}, удалено {len(g_removed)}")
+                logger.info(f"📊 Группа {cid}: добавлено {len(g_added)}, изменено {len(g_changed)}")
 
-                if g_added or g_changed or g_removed:
-                    msg = format_stock_update_message(g_added, g_changed, g_removed)
+                if g_added or g_changed:
+                    msg = format_stock_update_message(g_added, g_changed, {})
                     if msg:
                         try:
                             await context.bot.send_message(chat_id=int(cid), text=msg, parse_mode=ParseMode.HTML)
@@ -880,10 +874,9 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
 
                 u_added = {n: s_val for n, s_val in added.items() if n in subs}
                 u_changed = {n: c for n, c in changed.items() if n in subs}
-                u_removed = {n for n in removed if n in subs}
 
-                if u_added or u_changed or u_removed:
-                    msg = format_stock_update_message(u_added, u_changed, u_removed)
+                if u_added or u_changed:
+                    msg = format_stock_update_message(u_added, u_changed, {})
                     if msg:
                         try:
                             await context.bot.send_message(chat_id=int(uid), text=msg, parse_mode=ParseMode.HTML)
@@ -893,7 +886,6 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
 
         else:
             logger.info("✅ Изменений стока нет")
-            # Обновляем last_stock_data даже если изменений нет
             last_stock_data = new_stock
 
         # ===== РЕЗЕРВНОЕ КОПИРОВАНИЕ =====
