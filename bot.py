@@ -142,7 +142,6 @@ def clean_inactive_users():
                     del user_settings[uid]
                     removed += 1
             else:
-                # Если нет last_active, добавляем сейчас и пропускаем
                 user_settings[uid]['last_active'] = time.time()
         if removed > 0:
             save_json(DATA_FILE, user_settings)
@@ -163,20 +162,12 @@ def save_history(item, old_stock, new_stock):
             'old': old_stock,
             'new': new_stock
         })
-        # Храним последние 20 записей
         history[item] = history[item][-20:]
         save_json(HISTORY_FILE, history)
         return True
     except Exception as e:
         logger.error(f"Ошибка сохранения истории для {item}: {e}")
         return False
-
-def get_item_history(item, limit=10):
-    """Получение истории изменений предмета"""
-    history = load_json(HISTORY_FILE, {})
-    if item not in history:
-        return []
-    return history[item][-limit:]
 
 async def safe_edit(query, text=None, reply_markup=None):
     try:
@@ -201,8 +192,6 @@ last_weather_data = None
 _items_cache_time = 0
 _multipliers_cache_time = 0
 multipliers_cache = {}
-_pending_changes = {}
-_last_notify_time = {}
 
 def load_items():
     global all_items, _items_cache_time
@@ -265,7 +254,6 @@ def format_predict_msg(data):
     msg = f"🔮 <b>ПРЕДСКАЗАНИЯ</b>\n🔄 <i>Обновлено: {msk_time} МСК</i>\n"
     msg += "═" * 30 + "\n\n"
 
-    # Лунные фазы (с датой)
     weathers = sorted([w for w in data.get('weathers', []) if w.get('timestamp', 0) > now], key=lambda x: x['timestamp'])[:10]
     if weathers:
         msg += "🌙 <b>ЛУННЫЕ ФАЗЫ</b>\n"
@@ -281,7 +269,6 @@ def format_predict_msg(data):
                 msg += f"  {info['emoji']} {info['name']} — {time_str}\n"
         msg += "\n"
 
-    # Редкий сток
     important = ["Dragon's Breath", "Moon Bloom", "Venom Spitter", "Sunflower",
                  "Legendary Sprinkler", "Super Sprinkler", "Super Watering Can"]
     all_p = data.get('seeds', []) + data.get('gears', []) + data.get('props', [])
@@ -593,7 +580,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"🚀 /start от {uid}")
     if uid not in user_settings:
         user_settings[uid] = {"subscriptions": []}
-    # Обновляем время последней активности
     user_settings[uid]['last_active'] = time.time()
     save_json(DATA_FILE, user_settings)
     load_items()
@@ -615,12 +601,10 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     logger.info(f"👑 /admin от {user_id} в чате {chat_id}")
 
-    # Проверка: команда только для групп
     if chat_id > 0:
         await update.message.reply_text("❌ Эта команда работает только в группах!")
         return
 
-    # Проверка: является ли пользователь администратором группы
     try:
         member = await context.bot.get_chat_member(chat_id, user_id)
         if member.status not in ['creator', 'administrator']:
@@ -781,9 +765,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
 
-# ================= ФОНОВЫЕ ЗАДАЧИ =================
+# ================= ФОНОВЫЕ ЗАДАЧИ (МГНОВЕННЫЕ УВЕДОМЛЕНИЯ) =================
 async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
-    global last_stock_data, last_weather_data, _pending_changes, _last_notify_time
+    global last_stock_data, last_weather_data
 
     try:
         data = fetch_with_retry(API_URL, max_retries=2, timeout=10)
@@ -820,7 +804,7 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
             logger.info("🌤️ Первый запуск, погода запомнена")
         last_weather_data = new_w
 
-        # ===== СТОК =====
+        # ===== СТОК (МГНОВЕННЫЕ УВЕДОМЛЕНИЯ) =====
         new_stock = get_stock_signature(data)
         logger.info(f"📊 Новый сток (положительные позиции): {len(new_stock)}")
 
@@ -841,49 +825,46 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
             for name in removed:
                 save_history(name, last_stock_data.get(name, 0), 0)
 
-            # Буферизация изменений для групповых уведомлений
-            current_time = time.time()
+            # --- ГРУППЫ (мгновенные уведомления) ---
             for cid, s in group_settings.items():
                 subs = s.get("subscriptions", [])
                 if not subs:
                     continue
 
-                # Собираем изменения для этой группы
                 g_added = {n: s_val for n, s_val in added.items() if n in subs}
                 g_changed = {n: c for n, c in changed.items() if n in subs}
                 g_removed = {n for n in removed if n in subs}
 
                 if g_added or g_changed or g_removed:
-                    # Добавляем в буфер
-                    if cid not in _pending_changes:
-                        _pending_changes[cid] = {'added': {}, 'changed': {}, 'removed': set()}
-                    # Объединяем изменения
-                    for n, s_val in g_added.items():
-                        _pending_changes[cid]['added'][n] = s_val
-                    for n, c in g_changed.items():
-                        _pending_changes[cid]['changed'][n] = c
-                    for n in g_removed:
-                        _pending_changes[cid]['removed'].add(n)
+                    msg = format_stock_update_message(g_added, g_changed, g_removed)
+                    if msg:
+                        try:
+                            await context.bot.send_message(chat_id=int(cid), text=msg, parse_mode=ParseMode.HTML)
+                            logger.info(f"📢 Мгновенное уведомление о стоке отправлено в группу {cid}")
+                        except Exception as e:
+                            logger.error(f"Ошибка отправки стока в {cid}: {e}")
 
-                    # Обновляем время последнего изменения
-                    _last_notify_time[cid] = current_time
-
-            # Отправляем уведомления пользователям сразу
+            # --- ПОЛЬЗОВАТЕЛИ (ЛС) (мгновенные уведомления) ---
             for uid, s in user_settings.items():
                 subs = s.get("subscriptions", [])
                 if not subs:
                     continue
+
                 u_added = {n: s_val for n, s_val in added.items() if n in subs}
                 u_changed = {n: c for n, c in changed.items() if n in subs}
                 u_removed = {n for n in removed if n in subs}
+
                 if u_added or u_changed or u_removed:
                     msg = format_stock_update_message(u_added, u_changed, u_removed)
                     if msg:
                         try:
                             await context.bot.send_message(chat_id=int(uid), text=msg, parse_mode=ParseMode.HTML)
-                            logger.info(f"📢 Сток отправлен пользователю {uid}")
+                            logger.info(f"📢 Мгновенное уведомление о стоке отправлено пользователю {uid}")
                         except Exception as e:
                             logger.error(f"Ошибка отправки стока пользователю {uid}: {e}")
+
+        else:
+            logger.info("✅ Изменений стока нет")
 
         last_stock_data = new_stock
 
@@ -899,31 +880,6 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Ошибка в check_and_notify: {e}")
         traceback.print_exc()
-
-async def send_buffered_notifications(context: ContextTypes.DEFAULT_TYPE):
-    """Отправка буферизированных уведомлений группам (раз в 2 минуты)"""
-    global _pending_changes, _last_notify_time
-
-    current_time = time.time()
-    for cid, last_time in list(_last_notify_time.items()):
-        # Если прошло больше 2 минут с последнего изменения
-        if current_time - last_time > 120:
-            if cid in _pending_changes:
-                changes = _pending_changes[cid]
-                msg = format_stock_update_message(
-                    changes['added'],
-                    changes['changed'],
-                    changes['removed']
-                )
-                if msg:
-                    try:
-                        await context.bot.send_message(chat_id=int(cid), text=msg, parse_mode=ParseMode.HTML)
-                        logger.info(f"📢 Буферизированный сток отправлен в группу {cid}")
-                    except Exception as e:
-                        logger.error(f"Ошибка отправки буферизированного стока в {cid}: {e}")
-                # Очищаем буфер
-                del _pending_changes[cid]
-                del _last_notify_time[cid]
 
 async def update_predictions_job(context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -942,7 +898,6 @@ async def update_predictions_job(context: ContextTypes.DEFAULT_TYPE):
 
 async def update_multipliers_job(context: ContextTypes.DEFAULT_TYPE):
     try:
-        # Принудительно обновляем кеш
         global multipliers_cache, _multipliers_cache_time
         multipliers_cache = {}
         _multipliers_cache_time = 0
@@ -960,10 +915,8 @@ async def update_multipliers_job(context: ContextTypes.DEFAULT_TYPE):
 def main():
     logger.info("🚀 Запуск бота...")
 
-    # Создаём папку для бэкапов
     os.makedirs(BACKUP_DIR, exist_ok=True)
 
-    # Очистка вебхука
     try:
         r = requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
         logger.info(f"Вебхук очищен: {r.status_code}")
@@ -991,20 +944,11 @@ def main():
     app.add_handler(CommandHandler("multipliers", multipliers_command))
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    # Фоновые задачи
+    # Фоновые задачи (БЕЗ БУФЕРИЗАЦИИ)
     try:
-        # Основная проверка (сток + погода)
         app.job_queue.run_repeating(check_and_notify, interval=10, first=5)
-
-        # Отправка буферизированных уведомлений группам (раз в 2 минуты)
-        app.job_queue.run_repeating(send_buffered_notifications, interval=120, first=60)
-
-        # Обновление предсказаний
         app.job_queue.run_repeating(update_predictions_job, interval=30, first=10)
-
-        # Обновление мультипликаторов
         app.job_queue.run_repeating(update_multipliers_job, interval=60, first=15)
-
         logger.info("✅ Фоновые задачи запущены")
     except Exception as e:
         logger.error(f"❌ Ошибка запуска фоновых задач: {e}")
