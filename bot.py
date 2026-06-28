@@ -77,7 +77,7 @@ def format_timestamp(ts):
 
 def format_timestamp_full(ts):
     """
-    Форматирует время с датой и временем:
+    Форматирует время с датой:
     - если сегодня: "сегодня в 21:58"
     - если завтра: "завтра в 21:58"
     - если в этом году: "24.06 в 21:58"
@@ -293,7 +293,7 @@ def format_predict_msg(data):
     msg = f"🔮 <b>ПРЕДСКАЗАНИЯ</b>\n🔄 <i>Обновлено: {msk_time} МСК</i>\n"
     msg += "═" * 30 + "\n\n"
 
-    # Лунные фазы с полным временем
+    # Лунные фазы
     weathers = sorted([w for w in data.get('weathers', []) if w.get('timestamp', 0) > now], key=lambda x: x['timestamp'])[:10]
     if weathers:
         msg += "🌙 <b>ЛУННЫЕ ФАЗЫ</b>\n"
@@ -302,14 +302,10 @@ def format_predict_msg(data):
             ts = w.get('timestamp', 0)
             info = WEATHER_TYPES.get(name, {"emoji": "🌙", "name": name})
             time_str = format_timestamp_full(ts)
-            minutes_left = int((ts - now) / 60)
-            if minutes_left > 0:
-                msg += f"  {info['emoji']} {info['name']} — {time_str} (через {minutes_left} мин.)\n"
-            else:
-                msg += f"  {info['emoji']} {info['name']} — {time_str}\n"
+            msg += f"  {info['emoji']} {info['name']} — {time_str}\n"
         msg += "\n"
 
-    # Редкий сток с полным временем
+    # Редкий сток
     important = ["Dragon's Breath", "Moon Bloom", "Venom Spitter", "Sunflower",
                  "Legendary Sprinkler", "Super Sprinkler", "Super Watering Can",
                  "Hypno Bloom"]
@@ -339,17 +335,7 @@ def format_predict_msg(data):
             name = i.get('name', 'Неизвестно')
             ts = i.get('timestamp', 0)
             time_str = format_timestamp_full(ts)
-            minutes_left = int((ts - now) / 60)
-            hours_left = int(minutes_left / 60)
-            days_left = int(hours_left / 24)
-            
-            # Формируем время с учётом дней
-            if days_left > 0:
-                time_str = format_timestamp_full(ts) + f" (через {days_left} дн.)"
-            elif minutes_left > 0:
-                msg += f"    • {name} — {time_str} (через {minutes_left} мин.)\n"
-            else:
-                msg += f"    • {name} — {time_str}\n"
+            msg += f"    • {name} — {time_str}\n"
         msg += "\n"
     else:
         msg += "  ⏳ <b>ОЖИДАЙТЕ В БЛИЖАЙШЕЕ ВРЕМЯ:</b> Нет\n\n"
