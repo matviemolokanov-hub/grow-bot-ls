@@ -75,7 +75,38 @@ def format_timestamp(ts):
         return "—"
     return datetime.fromtimestamp(ts, timezone(timedelta(hours=3))).strftime('%H:%M:%S')
 
+def format_timestamp_full(ts):
+    """
+    Форматирует время с датой и временем:
+    - если сегодня: "сегодня в 21:58"
+    - если завтра: "завтра в 21:58"
+    - если в этом году: "24.06 в 21:58"
+    - если в другом году: "24.06.2024 в 21:58"
+    """
+    if not ts or ts == 0:
+        return "—"
+    dt = datetime.fromtimestamp(ts, timezone(timedelta(hours=3)))
+    now = get_msk_time()
+    
+    # Разница в днях
+    delta = (dt.date() - now.date()).days
+    
+    if delta == 0:
+        day_str = "сегодня"
+    elif delta == 1:
+        day_str = "завтра"
+    elif delta == -1:
+        day_str = "вчера"
+    else:
+        if dt.year == now.year:
+            day_str = dt.strftime('%d.%m')
+        else:
+            day_str = dt.strftime('%d.%m.%Y')
+    
+    return f"{day_str} в {dt.strftime('%H:%M')}"
+
 def format_timestamp_with_date(ts):
+    """Форматирует время с датой: 'сегодня в 21:58:00' или '24.06 21:58:00'"""
     if not ts or ts == 0:
         return "—"
     dt = datetime.fromtimestamp(ts, timezone(timedelta(hours=3)))
@@ -262,6 +293,7 @@ def format_predict_msg(data):
     msg = f"🔮 <b>ПРЕДСКАЗАНИЯ</b>\n🔄 <i>Обновлено: {msk_time} МСК</i>\n"
     msg += "═" * 30 + "\n\n"
 
+    # Лунные фазы с полным временем
     weathers = sorted([w for w in data.get('weathers', []) if w.get('timestamp', 0) > now], key=lambda x: x['timestamp'])[:10]
     if weathers:
         msg += "🌙 <b>ЛУННЫЕ ФАЗЫ</b>\n"
@@ -269,7 +301,7 @@ def format_predict_msg(data):
             name = w.get('name', 'Неизвестно')
             ts = w.get('timestamp', 0)
             info = WEATHER_TYPES.get(name, {"emoji": "🌙", "name": name})
-            time_str = format_timestamp_with_date(ts)
+            time_str = format_timestamp_full(ts)
             minutes_left = int((ts - now) / 60)
             if minutes_left > 0:
                 msg += f"  {info['emoji']} {info['name']} — {time_str} (через {minutes_left} мин.)\n"
@@ -277,6 +309,7 @@ def format_predict_msg(data):
                 msg += f"  {info['emoji']} {info['name']} — {time_str}\n"
         msg += "\n"
 
+    # Редкий сток с полным временем
     important = ["Dragon's Breath", "Moon Bloom", "Venom Spitter", "Sunflower",
                  "Legendary Sprinkler", "Super Sprinkler", "Super Watering Can",
                  "Hypno Bloom"]
@@ -305,9 +338,18 @@ def format_predict_msg(data):
         for i in upcoming:
             name = i.get('name', 'Неизвестно')
             ts = i.get('timestamp', 0)
-            time_str = format_timestamp_with_date(ts)
+            time_str = format_timestamp_full(ts)
             minutes_left = int((ts - now) / 60)
-            msg += f"    • {name} — {time_str}" + (f" (через {minutes_left} мин.)" if minutes_left > 0 else "") + "\n"
+            hours_left = int(minutes_left / 60)
+            days_left = int(hours_left / 24)
+            
+            # Формируем время с учётом дней
+            if days_left > 0:
+                time_str = format_timestamp_full(ts) + f" (через {days_left} дн.)"
+            elif minutes_left > 0:
+                msg += f"    • {name} — {time_str} (через {minutes_left} мин.)\n"
+            else:
+                msg += f"    • {name} — {time_str}\n"
         msg += "\n"
     else:
         msg += "  ⏳ <b>ОЖИДАЙТЕ В БЛИЖАЙШЕЕ ВРЕМЯ:</b> Нет\n\n"
@@ -317,7 +359,8 @@ def format_predict_msg(data):
         for i in past:
             name = i.get('name', 'Неизвестно')
             ts = i.get('timestamp', 0)
-            msg += f"    • {name} — {format_timestamp_with_date(ts)}\n"
+            time_str = format_timestamp_full(ts)
+            msg += f"    • {name} — {time_str}\n"
     else:
         msg += "  🕐 <b>БЫЛИ В СТОКЕ:</b> Нет\n"
 
