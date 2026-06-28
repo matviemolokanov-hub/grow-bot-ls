@@ -8,7 +8,7 @@ import shutil
 from datetime import datetime, timezone, timedelta
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
 
@@ -30,6 +30,7 @@ PREDICT_MESSAGES_FILE = os.path.join(DATA_DIR, "predict_messages.json")
 MULTIPLIER_MESSAGES_FILE = os.path.join(DATA_DIR, "multiplier_messages.json")
 HISTORY_FILE = os.path.join(DATA_DIR, "history.json")
 BACKUP_DIR = os.path.join(DATA_DIR, "backups")
+BLACKLIST_FILE = os.path.join(DATA_DIR, "blacklist.json")
 
 CACHE_TTL = 300
 ADMIN_IDS = [7632708290]
@@ -46,18 +47,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ================= ТИПЫ ПОГОДЫ =================
+# ================= ВСЕ ТИПЫ ПОГОДЫ =================
 WEATHER_TYPES = {
     "Clear": {"emoji": "☀️", "name": "Обычная"},
     "Rain": {"emoji": "🌧️", "name": "Дождь"},
     "Snowfall": {"emoji": "❄️", "name": "Снегопад"},
     "Thunderstorm": {"emoji": "⛈️", "name": "Гроза"},
     "Blood Moon": {"emoji": "🌕", "name": "Кровавая Луна"},
+    "Goldmoon": {"emoji": "🌙", "name": "Золотая Луна"},
+    "Rainbow Moon": {"emoji": "🌙🌈", "name": "Радужная Луна"},
+    "Megamoon": {"emoji": "🌕", "name": "Мега Луна"},
+    "Solar Eclipse": {"emoji": "🌑", "name": "Солнечное затмение"},
     "Starfall": {"emoji": "⭐", "name": "Звездопад"},
     "Midas": {"emoji": "✨", "name": "Золотая ночь"},
-    "Goldmoon": {"emoji": "🌙", "name": "Золотая Луна"},
     "Rainbow": {"emoji": "🌈", "name": "Радуга"},
-    "Rainbow Moon": {"emoji": "🌙🌈", "name": "Радужная Луна"},
     "Aurora": {"emoji": "🌌", "name": "Северное сияние"},
     "Fog": {"emoji": "🌫️", "name": "Туман"},
     "Wind": {"emoji": "💨", "name": "Ветер"},
@@ -164,6 +167,15 @@ def save_history(item, old_stock, new_stock):
         logger.error(f"Ошибка сохранения истории для {item}: {e}")
         return False
 
+# ================= ЧЁРНЫЙ СПИСОК =================
+blacklist = load_json(BLACKLIST_FILE, [])
+
+def save_blacklist():
+    save_json(BLACKLIST_FILE, blacklist)
+
+def is_group_blocked(chat_id):
+    return str(chat_id) in blacklist
+
 async def safe_edit(query, text=None, reply_markup=None):
     try:
         if text is not None:
@@ -266,7 +278,8 @@ def format_predict_msg(data):
         msg += "\n"
 
     important = ["Dragon's Breath", "Moon Bloom", "Venom Spitter", "Sunflower",
-                 "Legendary Sprinkler", "Super Sprinkler", "Super Watering Can"]
+                 "Legendary Sprinkler", "Super Sprinkler", "Super Watering Can",
+                 "Hypno Bloom"]
     all_p = data.get('seeds', []) + data.get('gears', []) + data.get('props', [])
 
     stock_now = [i for i in all_p if i.get('relativeText') == "*Currently on Stock*" and i.get('name') in important]
@@ -370,17 +383,37 @@ def format_full_stock_message(data):
 def get_weather_type(data):
     weather = data.get('weather', {})
     weathers = weather.get('weathers', {})
-    for key in WEATHER_TYPES:
-        if key == "Clear":
-            continue
+    
+    # Проверяем активные эффекты в weathers
+    for key in weathers.keys():
         val = weathers.get(key)
+        if key == "night" or key == "day" or key == "sunset":
+            continue
         if val is True or val == "true":
             return key
         if isinstance(val, dict) and val.get("playing") is True:
             return key
+    
+    # Проверяем фазу
     phase = weather.get('phase', '')
-    if phase in WEATHER_TYPES:
-        return phase
+    if phase:
+        for key in WEATHER_TYPES:
+            if key.lower() == phase.lower() and key != "Clear":
+                return key
+    
+    # Проверяем ночь/день
+    if weathers.get('night') or weathers.get('night') == "true":
+        return "Night"
+    if weathers.get('day') or weathers.get('day') == "true":
+        return "Day"
+    
+    if phase == "Day":
+        return "Day"
+    if phase == "Night":
+        return "Night"
+    if phase == "Sunset":
+        return "Sunset"
+    
     return "Clear"
 
 def get_stock_signature(data):
@@ -462,6 +495,57 @@ def get_main_menu():
         [InlineKeyboardButton("📦 Весь сток", callback_data="full_stock"), InlineKeyboardButton("📊 Множители", callback_data="show_mults")]
     ])
 
+def get_admin_menu(chat_id):
+    s = group_settings.get(str(chat_id), {"subscriptions": [], "weather": False})
+    weather_status = "✅" if s.get("weather", False) else "❌"
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🌾 Семена", callback_data="acat_Семена")],
+        [InlineKeyboardButton("📦 Ящики", callback_data="acat_Ящики")],
+        [InlineKeyboardButton("⚙️ Снаряжение", callback_data="acat_Снаряжение")],
+        [InlineKeyboardButton("🌤️ Погода", callback_data="acat_Погода")],
+        [InlineKeyboardButton("🗑️ Очистить всё", callback_data="adm_clear")],
+        [InlineKeyboardButton("🔙 Закрыть", callback_data="adm_close")]
+    ])
+
+def get_weather_menu(chat_id, page=0):
+    weather_list = [
+        "Rain", "Snowfall", "Thunderstorm",
+        "Blood Moon", "Goldmoon", "Rainbow Moon", "Megamoon", "Solar Eclipse",
+        "Starfall", "Rainbow", "Aurora", "Fog", "Wind"
+    ]
+    
+    s = group_settings.get(str(chat_id), {})
+    selected = s.get("selected_weather", [])
+    
+    per_page = 10
+    total_pages = max(1, (len(weather_list) + per_page - 1) // per_page)
+    page = max(0, min(page, total_pages - 1))
+    
+    start = page * per_page
+    current_items = weather_list[start:start + per_page]
+    
+    keyboard = []
+    for weather in current_items:
+        emoji = WEATHER_TYPES.get(weather, {}).get("emoji", "🌤️")
+        name = WEATHER_TYPES.get(weather, {}).get("name", weather)
+        status = "✅" if weather in selected else "❌"
+        keyboard.append([InlineKeyboardButton(f"{status} {emoji} {name}", 
+                                             callback_data=f"wthr_{weather}")])
+    
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("◀️", callback_data=f"wpage_{page-1}"))
+    if page < total_pages - 1:
+        nav.append(InlineKeyboardButton("▶️", callback_data=f"wpage_{page+1}"))
+    if nav:
+        keyboard.append(nav)
+    
+    count = len(selected)
+    keyboard.append([InlineKeyboardButton(f"📊 Выбрано: {count} из {len(weather_list)}", callback_data="ignore")])
+    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="admin_main")])
+    
+    return InlineKeyboardMarkup(keyboard)
+
 def get_items_menu(user_id, category, page=0, is_admin=False, chat_id=None):
     items = load_items()
     subs = []
@@ -496,17 +580,6 @@ def get_items_menu(user_id, category, page=0, is_admin=False, chat_id=None):
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data=back_data)])
     return InlineKeyboardMarkup(keyboard)
 
-def get_admin_menu(chat_id):
-    s = group_settings.get(str(chat_id), {"subscriptions": [], "weather": False})
-    w_stat = "✅" if s.get("weather") else "❌"
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🌾 Семена", callback_data="acat_Семена"), InlineKeyboardButton("📦 Ящики", callback_data="acat_Ящики")],
-        [InlineKeyboardButton("⚙️ Снаряжение", callback_data="acat_Снаряжение")],
-        [InlineKeyboardButton(f"{w_stat} Уведомления о погоде", callback_data="adm_tgl_w")],
-        [InlineKeyboardButton("🗑️ Очистить всё", callback_data="adm_clear")],
-        [InlineKeyboardButton("🔙 Закрыть", callback_data="adm_close")]
-    ])
-
 def get_subscriptions_menu(user_id, page=0):
     subscriptions = user_settings.get(str(user_id), {}).get("subscriptions", [])
     items_per_page = 10
@@ -531,8 +604,23 @@ def get_subscriptions_menu(user_id, page=0):
     return InlineKeyboardMarkup(keyboard)
 
 # ================= КОМАНДЫ =================
+async def getid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    chat_id = chat.id
+    chat_type = chat.type
+    title = chat.title or "Без названия"
+    
+    msg = f"🆔 <b>ИНФОРМАЦИЯ О ЧАТЕ</b>\n\n"
+    msg += f"📌 Название: <b>{title}</b>\n"
+    msg += f"🆔 ID: <code>{chat_id}</code>\n"
+    msg += f"📂 Тип: <b>{chat_type}</b>"
+    
+    await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+
 async def predict_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
+    if is_group_blocked(chat_id):
+        return
     logger.info(f"🔮 /predict от {chat_id}")
     data = get_predictions_data()
     if not data:
@@ -545,6 +633,8 @@ async def predict_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def multipliers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
+    if is_group_blocked(chat_id):
+        return
     logger.info(f"📊 /multipliers от {chat_id}")
     msg = format_multipliers_message()
     sent = await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
@@ -552,6 +642,9 @@ async def multipliers_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     save_json(MULTIPLIER_MESSAGES_FILE, multiplier_messages)
 
 async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    if is_group_blocked(chat_id):
+        return
     logger.info(f"🌤️ /weather от {update.effective_user.id}")
     try:
         data = fetch_with_retry(API_URL)
@@ -574,6 +667,9 @@ async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Ошибка: {e}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    if is_group_blocked(chat_id):
+        return
     if update.effective_chat.type != "private":
         await update.message.reply_text("❌ Эта команда работает только в личных сообщениях с ботом!")
         return
@@ -592,7 +688,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📦 <b>Всего предметов:</b> {len(all_items)}\n\n"
         "🔮 /predict — предсказания лун и стока\n"
         "🌤️ /weather — текущая погода\n"
-        "📊 /multipliers — мультипликаторы предметов",
+        "📊 /multipliers — мультипликаторы предметов\n"
+        "🆔 /getid — узнать ID этого чата",
         parse_mode=ParseMode.HTML,
         reply_markup=get_main_menu()
     )
@@ -600,6 +697,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
+    if is_group_blocked(str(chat_id)):
+        return
     logger.info(f"👑 /admin от {user_id} в чате {chat_id}")
 
     if chat_id > 0:
@@ -622,23 +721,23 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     cid_s = str(chat_id)
     if cid_s not in group_settings:
-        group_settings[cid_s] = {"subscriptions": [], "weather": False, "stock_topics": [], "weather_topics": []}
+        group_settings[cid_s] = {"subscriptions": [], "weather": False, "selected_weather": []}
         save_json(GROUP_SETTINGS_FILE, group_settings)
 
     await update.message.reply_text(
         "👑 <b>Админ-панель группы</b>\n\n"
-        "Настройте уведомления стока и погоды:\n\n"
-        "🌤️ Погода — уведомления о смене погоды\n\n"
-        "✅ — предмет уже в списке\n"
-        "❌ — не в списке",
+        "Настройте уведомления для этой группы:\n\n"
+        "✅ — уведомления включены для этого раздела\n"
+        "❌ — уведомления выключены",
         parse_mode=ParseMode.HTML,
         reply_markup=get_admin_menu(chat_id)
     )
 
 # ================= КОМАНДЫ ДЛЯ ТОПИКОВ =================
 async def start_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Включить уведомления о стоке в топик"""
     chat_id = update.effective_chat.id
+    if is_group_blocked(str(chat_id)):
+        return
     user_id = update.effective_user.id
     thread_id = update.effective_message.message_thread_id
     
@@ -662,7 +761,7 @@ async def start_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     cid_s = str(chat_id)
     if cid_s not in group_settings:
-        group_settings[cid_s] = {"subscriptions": [], "weather": False, "stock_topics": [], "weather_topics": []}
+        group_settings[cid_s] = {"subscriptions": [], "weather": False, "selected_weather": []}
     
     if "stock_topics" not in group_settings[cid_s]:
         group_settings[cid_s]["stock_topics"] = []
@@ -680,8 +779,9 @@ async def start_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("ℹ️ Этот топик уже добавлен для уведомлений о стоке!")
 
 async def stop_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отключить уведомления о стоке в топике"""
     chat_id = update.effective_chat.id
+    if is_group_blocked(str(chat_id)):
+        return
     user_id = update.effective_user.id
     thread_id = update.effective_message.message_thread_id
     
@@ -709,8 +809,9 @@ async def stop_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("ℹ️ Нет настроек для этого топика")
 
 async def start_weather_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Включить уведомления о погоде в топик"""
     chat_id = update.effective_chat.id
+    if is_group_blocked(str(chat_id)):
+        return
     user_id = update.effective_user.id
     thread_id = update.effective_message.message_thread_id
     
@@ -734,7 +835,7 @@ async def start_weather_topic(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     cid_s = str(chat_id)
     if cid_s not in group_settings:
-        group_settings[cid_s] = {"subscriptions": [], "weather": False, "stock_topics": [], "weather_topics": []}
+        group_settings[cid_s] = {"subscriptions": [], "weather": False, "selected_weather": []}
     
     if "weather_topics" not in group_settings[cid_s]:
         group_settings[cid_s]["weather_topics"] = []
@@ -752,8 +853,9 @@ async def start_weather_topic(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("ℹ️ Этот топик уже добавлен для уведомлений о погоде!")
 
 async def stop_weather_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отключить уведомления о погоде в топике"""
     chat_id = update.effective_chat.id
+    if is_group_blocked(str(chat_id)):
+        return
     user_id = update.effective_user.id
     thread_id = update.effective_message.message_thread_id
     
@@ -780,6 +882,97 @@ async def stop_weather_topic(update: Update, context: ContextTypes.DEFAULT_TYPE)
     else:
         await update.message.reply_text("ℹ️ Нет настроек для этого топика")
 
+# ================= КОМАНДЫ ДЛЯ ЧЁРНОГО СПИСКА =================
+async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in ADMIN_IDS:
+        await update.message.reply_text("❌ У вас нет прав!")
+        return
+    
+    if not blacklist:
+        await update.message.reply_text("📋 Чёрный список пуст.")
+        return
+    
+    msg = "🚫 <b>ЗАБЛОКИРОВАННЫЕ ГРУППЫ/КАНАЛЫ</b>\n\n"
+    for cid in blacklist:
+        try:
+            chat = await context.bot.get_chat(int(cid))
+            name = chat.title or "Без названия"
+            msg += f"• {name} (ID: <code>{cid}</code>)\n"
+        except:
+            msg += f"• ID: <code>{cid}</code> (недоступно)\n"
+    msg += f"\nВсего: {len(blacklist)} групп"
+    await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+
+async def blacklist_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in ADMIN_IDS:
+        await update.message.reply_text("❌ У вас нет прав!")
+        return
+    
+    args = context.args
+    if not args:
+        await update.message.reply_text(
+            "❌ Укажите ID группы или канала:\n\n"
+            "Пример: <code>/blacklist_add -1001234567890</code>\n\n"
+            "💡 Чтобы узнать ID, используйте <code>/getid</code> в группе.",
+            parse_mode=ParseMode.HTML
+        )
+        return
+    
+    chat_id = args[0]
+    if chat_id in blacklist:
+        await update.message.reply_text(f"ℹ️ Группа <code>{chat_id}</code> уже в чёрном списке.", parse_mode=ParseMode.HTML)
+        return
+    
+    try:
+        chat = await context.bot.get_chat(int(chat_id))
+        name = chat.title or "Без названия"
+    except:
+        name = "Неизвестно"
+    
+    blacklist.append(chat_id)
+    save_blacklist()
+    await update.message.reply_text(
+        f"✅ Группа/канал <b>{name}</b> (<code>{chat_id}</code>) добавлена в чёрный список!\n\n"
+        f"📌 Теперь бот будет игнорировать все сообщения и уведомления в этом чате.",
+        parse_mode=ParseMode.HTML
+    )
+
+async def blacklist_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in ADMIN_IDS:
+        await update.message.reply_text("❌ У вас нет прав!")
+        return
+    
+    args = context.args
+    if not args:
+        await update.message.reply_text(
+            "❌ Укажите ID группы или канала:\n\n"
+            "Пример: <code>/blacklist_remove -1001234567890</code>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+    
+    chat_id = args[0]
+    if chat_id not in blacklist:
+        await update.message.reply_text(f"ℹ️ Группа <code>{chat_id}</code> не в чёрном списке.", parse_mode=ParseMode.HTML)
+        return
+    
+    try:
+        chat = await context.bot.get_chat(int(chat_id))
+        name = chat.title or "Без названия"
+    except:
+        name = "Неизвестно"
+    
+    blacklist.remove(chat_id)
+    save_blacklist()
+    await update.message.reply_text(
+        f"✅ Группа/канал <b>{name}</b> (<code>{chat_id}</code>) удалена из чёрного списка!\n\n"
+        f"📌 Бот снова будет работать в этом чате.",
+        parse_mode=ParseMode.HTML
+    )
+
 # ================= ОБРАБОТЧИК КНОПОК =================
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -787,18 +980,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(query.from_user.id)
     cid = str(query.message.chat_id)
 
+    if is_group_blocked(cid):
+        await query.answer()
+        return
+
     logger.info(f"📥 ПОЛУЧЕН callback: {data} от {uid}")
 
     try:
         await query.answer()
 
         # ===== ПРОВЕРКА ПРАВ ДЛЯ АДМИН-КНОПОК =====
-        # acat_ - выбор категории в админке
-        # pg_aitm_ - пагинация в админке
-        # aitm_ - нажатие на предмет в админке
-        # admin_ - кнопки админ-панели
-        # adm_ - кнопки админ-панели (adm_tgl_w, adm_clear, adm_close)
-        if data.startswith("admin_") or data.startswith("acat_") or data.startswith("pg_aitm_") or data.startswith("aitm_") or data.startswith("adm_"):
+        if data.startswith("admin_") or data.startswith("acat_") or data.startswith("pg_aitm_") or data.startswith("aitm_") or data.startswith("adm_") or data.startswith("wthr_") or data.startswith("wpage_"):
             try:
                 member = await context.bot.get_chat_member(int(cid), int(uid))
                 if member.status not in ['creator', 'administrator']:
@@ -809,7 +1001,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.answer("❌ Не удалось проверить права!")
                 return
 
-        # ===== ОБЫЧНЫЕ КНОПКИ (без проверки прав) =====
+        # ===== ОБЫЧНЫЕ КНОПКИ =====
         if data == "menu":
             await safe_edit(query, "🌱 <b>Grow a Garden 2 Tracker</b>\n\nВыбери категорию, затем нажми на предмет.\n✅ — получать уведомления\n❌ — не получать", reply_markup=get_main_menu())
 
@@ -880,7 +1072,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             save_json(DATA_FILE, user_settings)
             await safe_edit(query, reply_markup=get_items_menu(uid, cat, int(pg)))
 
-        # ===== АДМИН-КНОПКИ (с проверкой прав выше) =====
+        # ===== АДМИН-КНОПКИ =====
         elif data == "admin_main":
             await safe_edit(query, "👑 <b>Админ-панель группы</b>", reply_markup=get_admin_menu(cid))
 
@@ -888,8 +1080,39 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.delete()
             return
 
+        elif data == "acat_Погода":
+            await safe_edit(query, "🌤️ <b>НАСТРОЙКА ПОГОДЫ</b>\n\n"
+                                  "Выберите виды погоды для уведомлений:\n"
+                                  "✅ — уведомления будут приходить\n"
+                                  "❌ — уведомления не будут приходить",
+                           reply_markup=get_weather_menu(cid))
+
+        elif data.startswith("wthr_"):
+            weather_key = data.replace("wthr_", "")
+            s = group_settings.get(cid, {"subscriptions": [], "weather": False})
+            
+            if "selected_weather" not in s:
+                s["selected_weather"] = []
+            
+            if weather_key in s["selected_weather"]:
+                s["selected_weather"].remove(weather_key)
+                await query.answer(f"❌ {WEATHER_TYPES.get(weather_key, {}).get('name', weather_key)} удалена")
+            else:
+                s["selected_weather"].append(weather_key)
+                await query.answer(f"✅ {WEATHER_TYPES.get(weather_key, {}).get('name', weather_key)} добавлена")
+            
+            group_settings[cid] = s
+            save_json(GROUP_SETTINGS_FILE, group_settings)
+            await safe_edit(query, reply_markup=get_weather_menu(cid))
+
+        elif data.startswith("wpage_"):
+            page = int(data.replace("wpage_", ""))
+            await safe_edit(query, reply_markup=get_weather_menu(cid, page))
+
         elif data.startswith("acat_"):
-            cat = data.split("_")[1]
+            cat = data.replace("acat_", "")
+            if cat == "Погода":
+                return
             await safe_edit(query, f"👑 Настройка: <b>{cat}</b>", reply_markup=get_items_menu(uid, cat, is_admin=True, chat_id=cid))
 
         elif data.startswith("pg_aitm_"):
@@ -909,22 +1132,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             save_json(GROUP_SETTINGS_FILE, group_settings)
             await safe_edit(query, reply_markup=get_items_menu(uid, cat, int(pg), is_admin=True, chat_id=cid))
 
-        elif data == "adm_tgl_w":
-            s = group_settings.get(cid, {"subscriptions": [], "weather": False})
-            s["weather"] = not s.get("weather", False)
-            group_settings[cid] = s
-            save_json(GROUP_SETTINGS_FILE, group_settings)
-            status = "включены" if s["weather"] else "выключены"
-            await query.answer(f"🌤️ Уведомления о погоде {status}")
-            await safe_edit(query, reply_markup=get_admin_menu(cid))
-
         elif data == "adm_clear":
             s = group_settings.get(cid, {"subscriptions": [], "weather": False})
             s["subscriptions"] = []
+            s["selected_weather"] = []
             group_settings[cid] = s
             save_json(GROUP_SETTINGS_FILE, group_settings)
-            await query.answer("🗑️ Все подписки очищены")
-            await safe_edit(query, "👑 <b>Админ-панель группы</b>\n\nВсе подписки очищены!", reply_markup=get_admin_menu(cid))
+            await query.answer("🗑️ Все подписки и настройки погоды очищены!")
+            await safe_edit(query, "👑 <b>Админ-панель группы</b>\n\nВсе подписки и настройки погоды очищены!", reply_markup=get_admin_menu(cid))
 
     except Exception as e:
         logger.error(f"Ошибка в button_handler: {e}\n{traceback.format_exc()}")
@@ -950,7 +1165,7 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
 
         logger.info("🔍 Проверка стока и погоды...")
 
-        # ===== ПОГОДА (ТОЛЬКО В ТОПИКИ) =====
+        # ===== ПОГОДА =====
         new_w = get_weather_type(data)
         weather_name = WEATHER_TYPES.get(new_w, {}).get('name', new_w)
         logger.info(f"🌤️ Текущая погода: {weather_name} (ключ: {new_w})")
@@ -959,25 +1174,34 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
             if new_w != last_weather_data:
                 old_name = WEATHER_TYPES.get(last_weather_data, {}).get('name', last_weather_data)
                 logger.info(f"🔄 Погода изменилась: {old_name} → {weather_name}")
-                msg = format_weather_message(new_w)
                 
                 for cid, s in group_settings.items():
-                    weather_topics = s.get("weather_topics", [])
+                    if is_group_blocked(cid):
+                        continue
                     
+                    weather_topics = s.get("weather_topics", [])
                     if not weather_topics:
                         continue
                     
-                    for thread_id in weather_topics:
-                        try:
-                            await context.bot.send_message(
-                                chat_id=int(cid),
-                                message_thread_id=thread_id,
-                                text=msg,
-                                parse_mode=ParseMode.HTML
-                            )
-                            logger.info(f"🌤️ Погода отправлена в топик {thread_id} группы {cid}")
-                        except Exception as e:
-                            logger.error(f"❌ Ошибка отправки погоды в топик {thread_id}: {e}")
+                    # Проверяем, выбрана ли эта погода
+                    selected_weather = s.get("selected_weather", [])
+                    
+                    # Если список пуст — отправляем все
+                    if not selected_weather or new_w in selected_weather:
+                        msg = format_weather_message(new_w)
+                        for thread_id in weather_topics:
+                            try:
+                                await context.bot.send_message(
+                                    chat_id=int(cid),
+                                    message_thread_id=thread_id,
+                                    text=msg,
+                                    parse_mode=ParseMode.HTML
+                                )
+                                logger.info(f"🌤️ Погода {new_w} отправлена в топик {thread_id} группы {cid}")
+                            except Exception as e:
+                                logger.error(f"❌ Ошибка отправки погоды в топик {thread_id}: {e}")
+                    else:
+                        logger.info(f"⏭️ Погода {new_w} не выбрана для группы {cid}")
             else:
                 logger.info("🌤️ Погода не изменилась")
         else:
@@ -1007,9 +1231,12 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
             for name in removed:
                 save_history(name, old_stock.get(name, 0), 0)
 
-            # --- ГРУППЫ (ТОЛЬКО В ТОПИКИ) ---
+            # --- ГРУППЫ ---
             logger.info(f"📢 Отправка уведомлений в топики...")
             for cid, s in group_settings.items():
+                if is_group_blocked(cid):
+                    logger.info(f"⏭️ Группа {cid} в чёрном списке, пропускаем")
+                    continue
                 subs = s.get("subscriptions", [])
                 stock_topics = s.get("stock_topics", [])
                 
@@ -1041,7 +1268,7 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                 else:
                     logger.info(f"⏭️ Группа {cid}: нет изменений по подпискам")
 
-            # --- ПОЛЬЗОВАТЕЛИ (ЛС) ---
+            # --- ПОЛЬЗОВАТЕЛИ ---
             logger.info(f"📢 Отправка уведомлений пользователям...")
             for uid, s in user_settings.items():
                 subs = s.get("subscriptions", [])
@@ -1086,6 +1313,9 @@ async def update_predictions_job(context: ContextTypes.DEFAULT_TYPE):
             return
         msg = format_predict_msg(data)
         for cid, mid in list(predict_messages.items()):
+            if is_group_blocked(cid):
+                predict_messages.pop(cid, None)
+                continue
             try:
                 await context.bot.edit_message_text(chat_id=int(cid), message_id=mid, text=msg, parse_mode=ParseMode.HTML)
             except Exception:
@@ -1101,6 +1331,9 @@ async def update_multipliers_job(context: ContextTypes.DEFAULT_TYPE):
         _multipliers_cache_time = 0
         msg = format_multipliers_message()
         for cid, mid in list(multiplier_messages.items()):
+            if is_group_blocked(cid):
+                multiplier_messages.pop(cid, None)
+                continue
             try:
                 await context.bot.edit_message_text(chat_id=int(cid), message_id=mid, text=msg, parse_mode=ParseMode.HTML)
             except Exception:
@@ -1121,11 +1354,12 @@ def main():
     except Exception as e:
         logger.warning(f"Не удалось очистить вебхук: {e}")
 
-    global user_settings, group_settings, predict_messages, multiplier_messages
+    global user_settings, group_settings, predict_messages, multiplier_messages, blacklist
     user_settings = load_json(DATA_FILE, {})
     group_settings = load_json(GROUP_SETTINGS_FILE, {})
     predict_messages = load_json(PREDICT_MESSAGES_FILE, {})
     multiplier_messages = load_json(MULTIPLIER_MESSAGES_FILE, {})
+    blacklist = load_json(BLACKLIST_FILE, [])
 
     import telegram
     logger.info(f"📦 Версия python-telegram-bot: {telegram.__version__}")
@@ -1140,10 +1374,14 @@ def main():
     app.add_handler(CommandHandler("weather", weather_command))
     app.add_handler(CommandHandler("predict", predict_command))
     app.add_handler(CommandHandler("multipliers", multipliers_command))
+    app.add_handler(CommandHandler("getid", getid_command))
     app.add_handler(CommandHandler("start_topic", start_topic))
     app.add_handler(CommandHandler("stop_topic", stop_topic))
     app.add_handler(CommandHandler("start_weather_topic", start_weather_topic))
     app.add_handler(CommandHandler("stop_weather_topic", stop_weather_topic))
+    app.add_handler(CommandHandler("blacklist", blacklist_command))
+    app.add_handler(CommandHandler("blacklist_add", blacklist_add))
+    app.add_handler(CommandHandler("blacklist_remove", blacklist_remove))
     app.add_handler(CallbackQueryHandler(button_handler))
 
     # Фоновые задачи
@@ -1155,7 +1393,7 @@ def main():
     except Exception as e:
         logger.error(f"❌ Ошибка запуска фоновых задач: {e}")
 
-    logger.info("✅ Бот запущен! Доступны команды: /start, /admin, /weather, /predict, /multipliers, /start_topic, /stop_topic, /start_weather_topic, /stop_weather_topic")
+    logger.info("✅ Бот запущен! Доступны команды: /start, /admin, /weather, /predict, /multipliers, /getid, /start_topic, /stop_topic, /start_weather_topic, /stop_weather_topic, /blacklist, /blacklist_add, /blacklist_remove")
 
     try:
         app.run_polling(
