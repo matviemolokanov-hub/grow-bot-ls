@@ -79,6 +79,13 @@ def format_timestamp(ts):
     return datetime.fromtimestamp(ts, timezone(timedelta(hours=3))).strftime('%H:%M:%S')
 
 def format_timestamp_full(ts):
+    """
+    Форматирует время с датой:
+    - если сегодня: "сегодня в 21:58"
+    - если завтра: "завтра в 21:58"
+    - если в этом году: "24.06 в 21:58"
+    - если в другом году: "24.06.2024 в 21:58"
+    """
     if not ts or ts == 0:
         return "—"
     dt = datetime.fromtimestamp(ts, timezone(timedelta(hours=3)))
@@ -284,15 +291,12 @@ def format_predict_msg(data):
         return "❌ Ошибка данных"
     now = time.time()
     msk_time = get_msk_time().strftime('%H:%M:%S')
-    msg = f"🔮 <b>ПРЕДСКАЗАНИЯ</b>\n"
-    msg += "━" * 30 + "\n"
-    msg += f"🔄 <i>Обновлено: {msk_time} МСК</i>\n"
-    msg += "━" * 30 + "\n\n"
+    msg = f"🔮 <b>ПРЕДСКАЗАНИЯ</b>\n🔄 <i>Обновлено: {msk_time} МСК</i>\n"
+    msg += "═" * 30 + "\n\n"
 
     weathers = sorted([w for w in data.get('weathers', []) if w.get('timestamp', 0) > now], key=lambda x: x['timestamp'])[:10]
     if weathers:
         msg += "🌙 <b>ЛУННЫЕ ФАЗЫ</b>\n"
-        msg += "━" * 30 + "\n"
         for w in weathers:
             name = w.get('name', 'Неизвестно')
             ts = w.get('timestamp', 0)
@@ -313,7 +317,6 @@ def format_predict_msg(data):
                   key=lambda x: x['timestamp'], reverse=True)[:10]
 
     msg += "📦 <b>РЕДКИЙ СТОК</b>\n"
-    msg += "━" * 30 + "\n"
 
     if stock_now:
         msg += "  🟢 <b>В НАЛИЧИИ СЕЙЧАС:</b>\n"
@@ -346,18 +349,16 @@ def format_predict_msg(data):
     else:
         msg += "  🕐 <b>БЫЛИ В СТОКЕ:</b> Нет\n"
 
-    msg += "\n" + "━" * 30 + "\n"
-    msg += "🤖 @growagardenstock235_bot"
+    msg += "\n" + "═" * 30 + "\n"
+    msg += "🤖 Наш бот: @growagardenstock235_bot"
     return msg
 
 def format_multipliers_message():
     mults = get_multipliers()
     if not mults:
         return "❌ Нет данных"
-    msg = f"📊 <b>МУЛЬТИПЛИКАТОРЫ</b>\n"
-    msg += "━" * 30 + "\n"
-    msg += f"🔄 <i>Обновлено: {get_msk_time().strftime('%H:%M:%S')} МСК</i>\n"
-    msg += "━" * 30 + "\n\n"
+    msg = f"📊 <b>МУЛЬТИПЛИКАТОРЫ ПРЕДМЕТОВ</b>\n🔄 <i>Обновлено: {get_msk_time().strftime('%H:%M:%S')} МСК</i>\n"
+    msg += "═" * 30 + "\n\n"
 
     high = []
     low = []
@@ -365,22 +366,20 @@ def format_multipliers_message():
         mult = item.get('multiplier', 0)
         name = item.get('name', 'Неизвестно')
         if mult >= 1.0:
-            high.append(f"  • {name} — <b>x{mult:.2f}</b> ⬆️")
+            high.append(f"    • {name} — <b>x{mult:.2f}</b>")
         else:
-            low.append(f"  • {name} — <b>x{mult:.2f}</b> ⬇️")
+            low.append(f"    • {name} — <b>x{mult:.2f}</b>")
 
     if high:
-        msg += "  🟢 <b>ВЫСОКИЕ (≥1.0)</b>\n"
-        msg += "━" * 30 + "\n"
+        msg += "  🟢 <b>ВЫСОКИЕ МУЛЬТИПЛИКАТОРЫ (1.0+):</b>\n"
         msg += "\n".join(high) + "\n\n"
     if low:
-        msg += "  🔴 <b>НИЗКИЕ (&lt;1.0)</b>\n"
-        msg += "━" * 30 + "\n"
+        msg += "  🔴 <b>НИЗКИЕ МУЛЬТИПЛИКАТОРЫ (&lt;1.0):</b>\n"
         msg += "\n".join(low) + "\n"
 
-    msg += "━" * 30 + "\n"
-    msg += "💡 <i>Выше множитель = дороже продажа</i>\n"
-    msg += "🤖 @growagardenstock235_bot"
+    msg += "\n" + "═" * 30 + "\n"
+    msg += "💡 <i>Чем выше множитель, тем дороже предмет при продаже</i>\n"
+    msg += "🤖 Наш бот: @growagardenstock235_bot"
     return msg
 
 def format_weather_message(weather_key):
@@ -390,31 +389,23 @@ def format_weather_message(weather_key):
         msg = f"🌤️ <b>ПОГОДА ИЗМЕНИЛАСЬ!</b>\n☀️ <b>Обычная погода</b>\n"
     else:
         msg = f"🌤️ <b>ПОГОДА ИЗМЕНИЛАСЬ!</b>\n{weather_info['emoji']} <b>{weather_info['name']}</b>\n"
-    msg += f"🕐 {msk_time.strftime('%H:%M:%S')} МСК\n\n🤖 @growagardenstock235_bot"
+    msg += f"🕐 {msk_time.strftime('%H:%M:%S')} МСК\n\n🤖 Наш бот: @growagardenstock235_bot"
     return msg
 
 def format_full_stock_message(data):
     msk_time = get_msk_time()
-    msg = f"📦 <b>ТЕКУЩИЙ СТОК</b>\n"
-    msg += "━" * 30 + "\n"
-    msg += f"🕐 {msk_time.strftime('%H:%M:%S')} МСК\n"
-    msg += "━" * 30 + "\n\n"
-    
-    for shop_type, shop_name in [("SeedShop_Normal", "🌾 СЕМЕНА"), ("CrateShop", "📦 ЯЩИКИ"), ("GearShop", "⚙️ СНАРЯЖЕНИЕ")]:
-        msg += f"{shop_name}\n"
-        msg += "━" * 30 + "\n"
+    msg = f"📦 <b>ТЕКУЩИЙ СТОК Grow a Garden 2</b>\n🕐 {msk_time.strftime('%H:%M:%S')} МСК\n\n"
+    for shop_type, shop_name in [("SeedShop_Normal", "🌾 Семена"), ("CrateShop", "📦 Ящики"), ("GearShop", "⚙️ Снаряжение")]:
+        msg += f"{shop_name}:\n"
         has = False
         items_sorted = data.get("shops", {}).get(shop_type, [])
         for item in items_sorted:
             if item.get("stock", 0) > 0:
-                msg += f"  • {item['name']} — <b>{item['stock']}</b> шт.\n"
+                msg += f"• {item['name']} — {item['stock']} шт.\n"
                 has = True
         if not has:
-            msg += "  Нет в наличии\n"
+            msg += "Нет в наличии\n"
         msg += "\n"
-    
-    msg += "━" * 30 + "\n"
-    msg += "[🔙 Назад]"
     return msg
 
 def get_weather_type(data):
@@ -422,6 +413,7 @@ def get_weather_type(data):
     weathers = weather.get('weathers', {})
     phase = weather.get('phase', '')
     
+    # Проверяем активные эффекты в weathers
     for key in weathers.keys():
         val = weathers.get(key)
         if key == "night" or key == "day" or key == "sunset" or key == "moon":
@@ -431,6 +423,7 @@ def get_weather_type(data):
         if isinstance(val, dict) and val.get("playing") is True:
             return key
     
+    # Проверяем фазу
     if phase:
         for key in WEATHER_TYPES:
             if key == "Clear":
@@ -507,20 +500,16 @@ def format_stock_update_message(added, changed, removed):
                 msg += f"  • {name} ({rarity})\n"
         msg += "\n"
 
-    msg += "🤖 @growagardenstock235_bot"
+    msg += "🤖 Наш бот: @growagardenstock235_bot"
     return msg
 
-# ================= УЛУЧШЕННЫЕ КЛАВИАТУРЫ =================
-
+# ================= КЛАВИАТУРЫ =================
 def get_main_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🌾 СЕМЕНА", callback_data="cat_Семена"), 
-         InlineKeyboardButton("📦 ЯЩИКИ", callback_data="cat_Ящики"), 
-         InlineKeyboardButton("⚙️ СНАРЯЖЕНИЕ", callback_data="cat_Снаряжение")],
+        [InlineKeyboardButton("🌾 Семена", callback_data="cat_Семена"), InlineKeyboardButton("📦 Ящики", callback_data="cat_Ящики")],
+        [InlineKeyboardButton("⚙️ Снаряжение", callback_data="cat_Снаряжение")],
         [InlineKeyboardButton("📋 Мои подписки", callback_data="my_subs")],
-        [InlineKeyboardButton("🔮 Предсказания", callback_data="show_predict"), 
-         InlineKeyboardButton("🌤️ Погода", callback_data="show_weather"),
-         InlineKeyboardButton("📊 Множители", callback_data="show_mults")],
+        [InlineKeyboardButton("📦 Весь сток", callback_data="full_stock"), InlineKeyboardButton("📊 Множители", callback_data="show_mults")]
     ])
 
 def get_admin_menu(chat_id):
@@ -530,7 +519,7 @@ def get_admin_menu(chat_id):
         [InlineKeyboardButton("🌾 Семена", callback_data="acat_Семена")],
         [InlineKeyboardButton("📦 Ящики", callback_data="acat_Ящики")],
         [InlineKeyboardButton("⚙️ Снаряжение", callback_data="acat_Снаряжение")],
-        [InlineKeyboardButton(f"{weather_status} Погода", callback_data="acat_Погода")],
+        [InlineKeyboardButton("🌤️ Погода", callback_data="acat_Погода")],
         [InlineKeyboardButton("🗑️ Очистить всё", callback_data="adm_clear")],
         [InlineKeyboardButton("🔙 Закрыть", callback_data="adm_close")]
     ])
@@ -584,8 +573,8 @@ def get_items_menu(user_id, category, page=0, is_admin=False, chat_id=None):
         subs = user_settings.get(str(user_id), {}).get("subscriptions", [])
 
     filtered = sorted([name for name, info in items.items() if info.get('category') == category])
-    per_page = 8
-    total_pages = max(1, (len(filtered) + per_page - 1) // per_page)
+    per_page = 10
+    total_pages = max(1, (len(filtered) - 1) // per_page + 1) if filtered else 1
     page = max(0, min(page, total_pages - 1))
 
     start = page * per_page
@@ -594,18 +583,12 @@ def get_items_menu(user_id, category, page=0, is_admin=False, chat_id=None):
     keyboard = []
     prefix = "aitm" if is_admin else "itm"
     for name in current_items:
-        info = items.get(name, {})
-        rarity = info.get('rarity', 'Common')
         status = "✅" if name in subs else "❌"
-        short_name = name[:20] + "..." if len(name) > 20 else name
-        keyboard.append([
-            InlineKeyboardButton(f"{status} {short_name}", callback_data=f"{prefix}_{category}_{page}_{name}")
-        ])
+        keyboard.append([InlineKeyboardButton(f"{status} {name}", callback_data=f"{prefix}_{category}_{page}_{name}")])
 
     nav = []
     if page > 0:
         nav.append(InlineKeyboardButton("◀️", callback_data=f"pg_{prefix}_{category}_{page-1}"))
-    nav.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="ignore"))
     if page < total_pages - 1:
         nav.append(InlineKeyboardButton("▶️", callback_data=f"pg_{prefix}_{category}_{page+1}"))
     if nav:
@@ -617,23 +600,19 @@ def get_items_menu(user_id, category, page=0, is_admin=False, chat_id=None):
 
 def get_subscriptions_menu(user_id, page=0):
     subscriptions = user_settings.get(str(user_id), {}).get("subscriptions", [])
-    per_page = 8
-    total_pages = max(1, (len(subscriptions) + per_page - 1) // per_page)
+    items_per_page = 10
+    total_pages = max(1, (len(subscriptions) + items_per_page - 1) // items_per_page) if subscriptions else 1
     page = max(0, min(page, total_pages - 1))
-    start = page * per_page
-    current_subs = subscriptions[start:start + per_page]
+    start = page * items_per_page
+    current_subs = subscriptions[start:start + items_per_page]
 
     keyboard = []
     for sub in current_subs:
-        short_name = sub[:20] + "..." if len(sub) > 20 else sub
-        keyboard.append([
-            InlineKeyboardButton(f"❌ {short_name}", callback_data=f"unsub_{sub}")
-        ])
+        keyboard.append([InlineKeyboardButton(f"❌ {sub}", callback_data=f"unsub_{sub}")])
 
     nav = []
     if page > 0:
         nav.append(InlineKeyboardButton("◀️", callback_data=f"sub_page_{page-1}"))
-    nav.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="ignore"))
     if page < total_pages - 1:
         nav.append(InlineKeyboardButton("▶️", callback_data=f"sub_page_{page+1}"))
     if nav:
@@ -697,7 +676,7 @@ async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 end_time = weathers[weather_type].get('endTime')
                 if end_time:
                     msg += f"⏱️ Длится до: {datetime.fromtimestamp(end_time).strftime('%H:%M:%S')} МСК\n"
-            msg += f"\n🕐 {get_msk_time().strftime('%H:%M:%S')} МСК\n\n🤖 @growagardenstock235_bot"
+            msg += f"\n🕐 {get_msk_time().strftime('%H:%M:%S')} МСК\n\n🤖 Наш бот: @growagardenstock235_bot"
             await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
         else:
             await update.message.reply_text("❌ Не удалось получить данные о погоде")
@@ -719,23 +698,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_settings[uid]['last_active'] = time.time()
     save_json(DATA_FILE, user_settings)
     load_items()
-    
-    items_count = len(all_items)
-    subs_count = len(user_settings[uid].get("subscriptions", []))
-    
     await update.message.reply_text(
-        f"🌱 <b>Grow a Garden 2 Tracker</b>\n"
-        f"━" * 30 + "\n\n"
-        f"📊 <b>{items_count}</b> предметов в базе\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"📌 Настрой уведомления в один клик:\n\n"
-        f"[🌾 СЕМЕНА] [📦 ЯЩИКИ] [⚙️ СНАРЯЖЕНИЕ]\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"📋 [Мои подписки] — <b>{subs_count}</b> предметов\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"🔮 Предсказания | 🌤️ Погода | 📊 Множители\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🤖 @growagardenstock235_bot",
+        "🌱 <b>Grow a Garden 2 Tracker</b>\n\n"
+        "Выбери категорию, затем нажми на предмет.\n"
+        "✅ — получать уведомления\n"
+        "❌ — не получать\n\n"
+        f"📦 <b>Всего предметов:</b> {len(all_items)}\n\n"
+        "🔮 /predict — предсказания лун и стока\n"
+        "🌤️ /weather — текущая погода\n"
+        "📊 /multipliers — мультипликаторы предметов\n"
+        "🆔 /getid — узнать ID этого чата",
         parse_mode=ParseMode.HTML,
         reply_markup=get_main_menu()
     )
@@ -1059,40 +1031,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 save_json(MULTIPLIER_MESSAGES_FILE, multiplier_messages)
             return
 
-        elif data == "show_predict":
-            data_predict = get_predictions_data()
-            if data_predict:
-                msg = format_predict_msg(data_predict)
-                await safe_edit(query, msg, reply_markup=get_main_menu())
-                # Сохраняем сообщение для автообновления
-                if query.message:
-                    predict_messages[cid] = query.message.message_id
-                    save_json(PREDICT_MESSAGES_FILE, predict_messages)
-            else:
-                await safe_edit(query, "❌ Не удалось получить данные предсказаний", reply_markup=get_main_menu())
-            return
-
-        elif data == "show_weather":
-            try:
-                data_api = fetch_with_retry(API_URL)
-                if data_api:
-                    weather_type = get_weather_type(data_api)
-                    weather = data_api.get('weather', {})
-                    weathers = weather.get('weathers', {})
-                    weather_info = WEATHER_TYPES.get(weather_type, {"emoji": "☀️", "name": "Обычная"})
-                    msg = f"🌤️ <b>ТЕКУЩАЯ ПОГОДА</b>\n\n{weather_info['emoji']} <b>{weather_info['name']}</b>\n"
-                    if weather_type != "Clear" and isinstance(weathers.get(weather_type), dict):
-                        end_time = weathers[weather_type].get('endTime')
-                        if end_time:
-                            msg += f"⏱️ Длится до: {datetime.fromtimestamp(end_time).strftime('%H:%M:%S')} МСК\n"
-                    msg += f"\n🕐 {get_msk_time().strftime('%H:%M:%S')} МСК\n\n🤖 @growagardenstock235_bot"
-                    await safe_edit(query, msg, reply_markup=get_main_menu())
-                else:
-                    await safe_edit(query, "❌ Не удалось получить данные о погоде", reply_markup=get_main_menu())
-            except Exception as e:
-                await safe_edit(query, f"❌ Ошибка: {e}", reply_markup=get_main_menu())
-            return
-
         elif data == "full_stock":
             try:
                 data_api = fetch_with_retry(API_URL)
@@ -1110,7 +1048,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not subscriptions:
                 await safe_edit(query, "📋 <b>Нет подписок</b>", reply_markup=get_main_menu())
             else:
-                await safe_edit(query, "📋 <b>Мои подписки</b>", reply_markup=get_subscriptions_menu(uid))
+                await safe_edit(query, "📋 <b>Твои подписки</b>", reply_markup=get_subscriptions_menu(uid))
             return
 
         elif data.startswith("sub_page_"):
@@ -1125,14 +1063,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_settings[uid]["subscriptions"] = subscriptions
             save_json(DATA_FILE, user_settings)
             if subscriptions:
-                await safe_edit(query, "📋 <b>Мои подписки</b>", reply_markup=get_subscriptions_menu(uid))
+                await safe_edit(query, "📋 <b>Твои подписки</b>", reply_markup=get_subscriptions_menu(uid))
             else:
                 await safe_edit(query, "📋 <b>Нет подписок</b>", reply_markup=get_main_menu())
             return
 
         elif data.startswith("cat_"):
             cat = data.split("_")[1]
-            await safe_edit(query, f"🌾 <b>{cat}</b>", reply_markup=get_items_menu(uid, cat))
+            await safe_edit(query, f"📂 Категория: <b>{cat}</b>", reply_markup=get_items_menu(uid, cat))
 
         elif data.startswith("pg_itm_"):
             _, _, cat, pg = data.split("_")
