@@ -1385,7 +1385,7 @@ def main():
             timeout=10
         )
         if r.status_code == 200:
-            logger.info("✅ Вебхук очищен успешно")
+            logger.info("✅ Вебхук очищен успешно (HTTP)")
         else:
             logger.warning(f"⚠️ Ошибка очистки вебхука: {r.status_code} - {r.text}")
             
@@ -1413,7 +1413,7 @@ def main():
     load_items()
     get_multipliers()
 
-    # Создаём приложение с явным отключением вебхука
+    # Создаём приложение
     app = Application.builder() \
         .token(TOKEN) \
         .connect_timeout(30) \
@@ -1421,13 +1421,12 @@ def main():
         .build()
 
     # Принудительно удаляем вебхук через бота
-    import asyncio
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            loop.create_task(app.bot.delete_webhook(drop_pending_updates=True))
-        else:
-            loop.run_until_complete(app.bot.delete_webhook(drop_pending_updates=True))
+        import asyncio
+        # Создаём новый цикл для удаления вебхука
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(app.bot.delete_webhook(drop_pending_updates=True))
         logger.info("✅ Вебхук удалён через bot.delete_webhook")
     except Exception as e:
         logger.warning(f"⚠️ Не удалось удалить вебхук через bot: {e}")
@@ -1467,3 +1466,6 @@ def main():
     except Exception as e:
         logger.error(f"❌ Критическая ошибка: {e}")
         traceback.print_exc()
+
+if __name__ == "__main__":
+    main()
