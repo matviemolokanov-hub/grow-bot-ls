@@ -54,14 +54,17 @@ WEATHER_TYPES = {
     "Snowfall": {"emoji": "❄️", "name": "Снегопад"},
     "Thunderstorm": {"emoji": "⛈️", "name": "Гроза"},
     "Blood Moon": {"emoji": "🌕", "name": "Кровавая Луна"},
-    "Goldmoon": {"emoji": "🌙", "name": "Золотая Луна"},
+    "Gold Moon": {"emoji": "🌙", "name": "Золотая Луна"},
     "Rainbow Moon": {"emoji": "🌙🌈", "name": "Радужная Луна"},
-    "Megamoon": {"emoji": "🌕", "name": "Мега Луна"},
+    "Mega Moon": {"emoji": "🌕", "name": "Мега Луна"},
+    "Chained Moon": {"emoji": "🌕⛓️", "name": "Прикованная Луна"},
+    "Pizza Moon": {"emoji": "🍕🌙", "name": "Пицца Луна"},
     "Solar Eclipse": {"emoji": "🌑", "name": "Солнечное затмение"},
     "Starfall": {"emoji": "⭐", "name": "Звездопад"},
-    "Midas": {"emoji": "✨", "name": "Золотая ночь"},
     "Rainbow": {"emoji": "🌈", "name": "Радуга"},
     "Aurora": {"emoji": "🌌", "name": "Северное сияние"},
+    "Sunburst": {"emoji": "☀️✨", "name": "Солнечная вспышка"},
+    "Midas": {"emoji": "✨", "name": "Золотая ночь"},
     "Fog": {"emoji": "🌫️", "name": "Туман"},
     "Wind": {"emoji": "💨", "name": "Ветер"},
 }
@@ -88,7 +91,6 @@ def format_timestamp_full(ts):
     dt = datetime.fromtimestamp(ts, timezone(timedelta(hours=3)))
     now = get_msk_time()
     
-    # Разница в днях
     delta = (dt.date() - now.date()).days
     
     if delta == 0:
@@ -106,7 +108,6 @@ def format_timestamp_full(ts):
     return f"{day_str} в {dt.strftime('%H:%M')}"
 
 def format_timestamp_with_date(ts):
-    """Форматирует время с датой: 'сегодня в 21:58:00' или '24.06 21:58:00'"""
     if not ts or ts == 0:
         return "—"
     dt = datetime.fromtimestamp(ts, timezone(timedelta(hours=3)))
@@ -293,7 +294,6 @@ def format_predict_msg(data):
     msg = f"🔮 <b>ПРЕДСКАЗАНИЯ</b>\n🔄 <i>Обновлено: {msk_time} МСК</i>\n"
     msg += "═" * 30 + "\n\n"
 
-    # Лунные фазы
     weathers = sorted([w for w in data.get('weathers', []) if w.get('timestamp', 0) > now], key=lambda x: x['timestamp'])[:10]
     if weathers:
         msg += "🌙 <b>ЛУННЫЕ ФАЗЫ</b>\n"
@@ -305,7 +305,6 @@ def format_predict_msg(data):
             msg += f"  {info['emoji']} {info['name']} — {time_str}\n"
         msg += "\n"
 
-    # Редкий сток
     important = ["Dragon's Breath", "Moon Bloom", "Venom Spitter", "Sunflower",
                  "Legendary Sprinkler", "Super Sprinkler", "Super Watering Can",
                  "Hypno Bloom"]
@@ -412,11 +411,12 @@ def format_full_stock_message(data):
 def get_weather_type(data):
     weather = data.get('weather', {})
     weathers = weather.get('weathers', {})
+    phase = weather.get('phase', '')
     
     # Проверяем активные эффекты в weathers
     for key in weathers.keys():
         val = weathers.get(key)
-        if key == "night" or key == "day" or key == "sunset":
+        if key == "night" or key == "day" or key == "sunset" or key == "moon":
             continue
         if val is True or val == "true":
             return key
@@ -424,24 +424,12 @@ def get_weather_type(data):
             return key
     
     # Проверяем фазу
-    phase = weather.get('phase', '')
     if phase:
         for key in WEATHER_TYPES:
-            if key.lower() == phase.lower() and key != "Clear":
+            if key == "Clear":
+                continue
+            if key.lower() == phase.lower():
                 return key
-    
-    # Проверяем ночь/день
-    if weathers.get('night') or weathers.get('night') == "true":
-        return "Night"
-    if weathers.get('day') or weathers.get('day') == "true":
-        return "Day"
-    
-    if phase == "Day":
-        return "Day"
-    if phase == "Night":
-        return "Night"
-    if phase == "Sunset":
-        return "Sunset"
     
     return "Clear"
 
@@ -539,8 +527,9 @@ def get_admin_menu(chat_id):
 def get_weather_menu(chat_id, page=0):
     weather_list = [
         "Rain", "Snowfall", "Thunderstorm",
-        "Blood Moon", "Goldmoon", "Rainbow Moon", "Megamoon", "Solar Eclipse",
-        "Starfall", "Rainbow", "Aurora", "Fog", "Wind"
+        "Blood Moon", "Gold Moon", "Rainbow Moon", "Mega Moon",
+        "Chained Moon", "Pizza Moon", "Solar Eclipse",
+        "Starfall", "Rainbow", "Aurora", "Sunburst", "Fog", "Wind"
     ]
     
     s = group_settings.get(str(chat_id), {})
@@ -1212,10 +1201,8 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
                     if not weather_topics:
                         continue
                     
-                    # Проверяем, выбрана ли эта погода
                     selected_weather = s.get("selected_weather", [])
                     
-                    # Если список пуст — отправляем все
                     if not selected_weather or new_w in selected_weather:
                         msg = format_weather_message(new_w)
                         for thread_id in weather_topics:
@@ -1379,7 +1366,6 @@ def main():
 
     # ===== ПРИНУДИТЕЛЬНАЯ ОЧИСТКА ВЕБХУКА =====
     try:
-        # Удаляем вебхук с ожиданием
         r = requests.get(
             f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=true",
             timeout=10
@@ -1389,7 +1375,6 @@ def main():
         else:
             logger.warning(f"⚠️ Ошибка очистки вебхука: {r.status_code} - {r.text}")
             
-        # Дополнительная проверка: запрашиваем статус вебхука
         r = requests.get(
             f"https://api.telegram.org/bot{TOKEN}/getWebhookInfo",
             timeout=10
@@ -1413,17 +1398,14 @@ def main():
     load_items()
     get_multipliers()
 
-    # Создаём приложение
     app = Application.builder() \
         .token(TOKEN) \
         .connect_timeout(30) \
         .read_timeout(30) \
         .build()
 
-    # Принудительно удаляем вебхук через бота
     try:
         import asyncio
-        # Создаём новый цикл для удаления вебхука
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         loop.run_until_complete(app.bot.delete_webhook(drop_pending_updates=True))
@@ -1446,7 +1428,6 @@ def main():
     app.add_handler(CommandHandler("blacklist_remove", blacklist_remove))
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    # Фоновые задачи
     try:
         app.job_queue.run_repeating(check_and_notify, interval=10, first=5)
         app.job_queue.run_repeating(update_predictions_job, interval=30, first=10)
