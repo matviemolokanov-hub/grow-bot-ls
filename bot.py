@@ -1377,11 +1377,28 @@ def main():
 
     os.makedirs(BACKUP_DIR, exist_ok=True)
 
+    # ===== ПРИНУДИТЕЛЬНАЯ ОЧИСТКА ВЕБХУКА =====
     try:
-        r = requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
-        logger.info(f"Вебхук очищен: {r.status_code}")
+        # Удаляем вебхук с ожиданием
+        r = requests.get(
+            f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=true",
+            timeout=10
+        )
+        if r.status_code == 200:
+            logger.info("✅ Вебхук очищен успешно")
+        else:
+            logger.warning(f"⚠️ Ошибка очистки вебхука: {r.status_code} - {r.text}")
+            
+        # Дополнительная проверка: запрашиваем статус вебхука
+        r = requests.get(
+            f"https://api.telegram.org/bot{TOKEN}/getWebhookInfo",
+            timeout=10
+        )
+        if r.status_code == 200:
+            webhook_info = r.json()
+            logger.info(f"📡 Статус вебхука: {webhook_info}")
     except Exception as e:
-        logger.warning(f"Не удалось очистить вебхук: {e}")
+        logger.warning(f"⚠️ Не удалось очистить вебхук: {e}")
 
     global user_settings, group_settings, predict_messages, multiplier_messages, blacklist
     user_settings = load_json(DATA_FILE, {})
@@ -1396,7 +1413,24 @@ def main():
     load_items()
     get_multipliers()
 
-    app = Application.builder().token(TOKEN).connect_timeout(30).read_timeout(30).build()
+    # Создаём приложение с явным отключением вебхука
+    app = Application.builder() \
+        .token(TOKEN) \
+        .connect_timeout(30) \
+        .read_timeout(30) \
+        .build()
+
+    # Принудительно удаляем вебхук через бота
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            loop.create_task(app.bot.delete_webhook(drop_pending_updates=True))
+        else:
+            loop.run_until_complete(app.bot.delete_webhook(drop_pending_updates=True))
+        logger.info("✅ Вебхук удалён через bot.delete_webhook")
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось удалить вебхук через bot: {e}")
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_panel))
@@ -1433,6 +1467,3 @@ def main():
     except Exception as e:
         logger.error(f"❌ Критическая ошибка: {e}")
         traceback.print_exc()
-
-if __name__ == "__main__":
-    main()
