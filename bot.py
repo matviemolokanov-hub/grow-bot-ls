@@ -19,6 +19,7 @@ if not TOKEN:
 
 API_URL = "https://grow-a-garden-2-tracker.onrender.com/api/stock"
 PREDICT_URL = "https://grow-a-garden-2-tracker.onrender.com/api/predictions"
+AUCTION_API_URL = "https://grow-a-garden-2-tracker.onrender.com/api/auction"
 
 DATA_DIR = "/app/data" if os.path.exists("/app") else "."
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -31,6 +32,7 @@ MULTIPLIER_MESSAGES_FILE = os.path.join(DATA_DIR, "multiplier_messages.json")
 HISTORY_FILE = os.path.join(DATA_DIR, "history.json")
 BACKUP_DIR = os.path.join(DATA_DIR, "backups")
 BLACKLIST_FILE = os.path.join(DATA_DIR, "blacklist.json")
+AUCTION_MESSAGES_FILE = os.path.join(DATA_DIR, "auction_messages.json")
 
 CACHE_TTL = 300
 ADMIN_IDS = [7632708290]
@@ -79,13 +81,6 @@ def format_timestamp(ts):
     return datetime.fromtimestamp(ts, timezone(timedelta(hours=3))).strftime('%H:%M:%S')
 
 def format_timestamp_full(ts):
-    """
-    Форматирует время с датой:
-    - если сегодня: "сегодня в 21:58"
-    - если завтра: "завтра в 21:58"
-    - если в этом году: "24.06 в 21:58"
-    - если в другом году: "24.06.2024 в 21:58"
-    """
     if not ts or ts == 0:
         return "—"
     dt = datetime.fromtimestamp(ts, timezone(timedelta(hours=3)))
@@ -117,6 +112,36 @@ def format_timestamp_with_date(ts):
     else:
         return dt.strftime('%d.%m %H:%M:%S')
 
+def format_auction_time(expires_at, now):
+    """Форматирует время до окончания аукциона"""
+    if not expires_at:
+        return "—"
+    diff = expires_at - now
+    if diff <= 0:
+        return "⏰ Завершён"
+    
+    total_seconds = int(diff)
+    minutes = total_seconds // 60
+    seconds = total_seconds % 60
+    
+    if minutes > 0:
+        return f"{minutes}м {seconds}с"
+    else:
+        return f"{seconds}с"
+
+def format_price(price):
+    """Форматирует цену"""
+    if not price or price == 0:
+        return "—"
+    if price >= 1000000000:
+        return f"{price // 1000000000} млрд"
+    elif price >= 1000000:
+        return f"{price // 1000000} млн"
+    elif price >= 1000:
+        return f"{price // 1000} тыс"
+    else:
+        return str(price)
+
 def load_json(filename, default=None):
     try:
         if os.path.exists(filename):
@@ -147,6 +172,16 @@ def fetch_with_retry(url, max_retries=3, timeout=10):
         except Exception as e:
             logger.warning(f"⚠️ Ошибка запроса: {e}, попытка {attempt+1}/{max_retries}")
             time.sleep(2 ** attempt)
+    return None
+
+def get_auction_data():
+    """Получает данные об аукционе"""
+    try:
+        resp = requests.get(AUCTION_API_URL, timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception as e:
+        logger.error(f"Ошибка получения аукциона: {e}")
     return None
 
 def backup_data():
@@ -225,6 +260,7 @@ user_settings = load_json(DATA_FILE, {})
 group_settings = load_json(GROUP_SETTINGS_FILE, {})
 predict_messages = load_json(PREDICT_MESSAGES_FILE, {})
 multiplier_messages = load_json(MULTIPLIER_MESSAGES_FILE, {})
+auction_messages = load_json(AUCTION_MESSAGES_FILE, {})
 all_items = {}
 last_stock_data = None
 last_weather_data = None
@@ -291,12 +327,15 @@ def format_predict_msg(data):
         return "❌ Ошибка данных"
     now = time.time()
     msk_time = get_msk_time().strftime('%H:%M:%S')
-    msg = f"🔮 <b>ПРЕДСКАЗАНИЯ</b>\n🔄 <i>Обновлено: {msk_time} МСК</i>\n"
-    msg += "═" * 30 + "\n\n"
+    msg = f"🔮 <b>ПРЕДСКАЗАНИЯ</b>\n"
+    msg += "━" * 30 + "\n"
+    msg += f"🔄 <i>Обновлено: {msk_time} МСК</i>\n"
+    msg += "━" * 30 + "\n\n"
 
     weathers = sorted([w for w in data.get('weathers', []) if w.get('timestamp', 0) > now], key=lambda x: x['timestamp'])[:10]
     if weathers:
         msg += "🌙 <b>ЛУННЫЕ ФАЗЫ</b>\n"
+        msg += "━" * 30 + "\n"
         for w in weathers:
             name = w.get('name', 'Неизвестно')
             ts = w.get('timestamp', 0)
@@ -317,6 +356,7 @@ def format_predict_msg(data):
                   key=lambda x: x['timestamp'], reverse=True)[:10]
 
     msg += "📦 <b>РЕДКИЙ СТОК</b>\n"
+    msg += "━" * 30 + "\n"
 
     if stock_now:
         msg += "  🟢 <b>В НАЛИЧИИ СЕЙЧАС:</b>\n"
@@ -349,16 +389,69 @@ def format_predict_msg(data):
     else:
         msg += "  🕐 <b>БЫЛИ В СТОКЕ:</b> Нет\n"
 
-    msg += "\n" + "═" * 30 + "\n"
-    msg += "🤖 Наш бот: @growagardenstock235_bot"
+    msg += "\n" + "━" * 30 + "\n"
+    msg += "🤖 @growagardenstock235_bot"
+    return msg
+
+def format_auction_message(data):
+    """Форматирует сообщение с аукционом"""
+    if not data:
+        return "❌ Не удалось получить данные аукциона"
+    
+    lots = data.get('lots', [])
+    if not lots:
+        return "📭 На аукционе сейчас нет лотов"
+    
+    now = data.get('serverNow', time.time())
+    msk_time = get_msk_time().strftime('%H:%M:%S')
+    
+    msg = f"🏪 <b>АУКЦИОН</b>\n"
+    msg += f"🔄 <i>Обновлено: {msk_time} МСК</i>\n"
+    msg += "━" * 30 + "\n\n"
+    
+    # Таймер до следующего обновления
+    refresh_at = data.get('refreshAt')
+    if refresh_at:
+        diff = refresh_at - now
+        if diff > 0:
+            minutes = int(diff // 60)
+            seconds = int(diff % 60)
+            msg += f"⏱️ <b>Обновление через:</b> {minutes}м {seconds}с\n"
+            msg += "━" * 30 + "\n\n"
+    
+    # Лоты
+    for lot in lots:
+        name = lot.get('name', 'Неизвестно')
+        stock = lot.get('stock', 0)
+        price = lot.get('currentPrice', 0)
+        expires_at = lot.get('expiresAt', 0)
+        count = lot.get('count', 1)
+        
+        time_left = format_auction_time(expires_at, now)
+        price_str = format_price(price)
+        
+        # Цвет для количества
+        stock_emoji = "🟢" if stock > 100 else "🟡" if stock > 10 else "🔴"
+        
+        msg += f"📦 <b>{name}</b>\n"
+        msg += f"  • Осталось: {stock_emoji} <b>{stock}</b> шт.\n"
+        msg += f"  • Цена: <b>{price_str}</b>\n"
+        msg += f"  • ⏳ До окончания: <b>{time_left}</b>\n"
+        msg += "\n"
+    
+    msg += "━" * 30 + "\n"
+    msg += "🤖 @growagardenstock235_bot"
+    
     return msg
 
 def format_multipliers_message():
     mults = get_multipliers()
     if not mults:
         return "❌ Нет данных"
-    msg = f"📊 <b>МУЛЬТИПЛИКАТОРЫ ПРЕДМЕТОВ</b>\n🔄 <i>Обновлено: {get_msk_time().strftime('%H:%M:%S')} МСК</i>\n"
-    msg += "═" * 30 + "\n\n"
+    msg = f"📊 <b>МУЛЬТИПЛИКАТОРЫ</b>\n"
+    msg += "━" * 30 + "\n"
+    msg += f"🔄 <i>Обновлено: {get_msk_time().strftime('%H:%M:%S')} МСК</i>\n"
+    msg += "━" * 30 + "\n\n"
 
     high = []
     low = []
@@ -366,20 +459,22 @@ def format_multipliers_message():
         mult = item.get('multiplier', 0)
         name = item.get('name', 'Неизвестно')
         if mult >= 1.0:
-            high.append(f"    • {name} — <b>x{mult:.2f}</b>")
+            high.append(f"  • {name} — <b>x{mult:.2f}</b> ⬆️")
         else:
-            low.append(f"    • {name} — <b>x{mult:.2f}</b>")
+            low.append(f"  • {name} — <b>x{mult:.2f}</b> ⬇️")
 
     if high:
-        msg += "  🟢 <b>ВЫСОКИЕ МУЛЬТИПЛИКАТОРЫ (1.0+):</b>\n"
+        msg += "  🟢 <b>ВЫСОКИЕ (≥1.0)</b>\n"
+        msg += "━" * 30 + "\n"
         msg += "\n".join(high) + "\n\n"
     if low:
-        msg += "  🔴 <b>НИЗКИЕ МУЛЬТИПЛИКАТОРЫ (&lt;1.0):</b>\n"
+        msg += "  🔴 <b>НИЗКИЕ (&lt;1.0)</b>\n"
+        msg += "━" * 30 + "\n"
         msg += "\n".join(low) + "\n"
 
-    msg += "\n" + "═" * 30 + "\n"
-    msg += "💡 <i>Чем выше множитель, тем дороже предмет при продаже</i>\n"
-    msg += "🤖 Наш бот: @growagardenstock235_bot"
+    msg += "━" * 30 + "\n"
+    msg += "💡 <i>Выше множитель = дороже продажа</i>\n"
+    msg += "🤖 @growagardenstock235_bot"
     return msg
 
 def format_weather_message(weather_key):
@@ -389,23 +484,31 @@ def format_weather_message(weather_key):
         msg = f"🌤️ <b>ПОГОДА ИЗМЕНИЛАСЬ!</b>\n☀️ <b>Обычная погода</b>\n"
     else:
         msg = f"🌤️ <b>ПОГОДА ИЗМЕНИЛАСЬ!</b>\n{weather_info['emoji']} <b>{weather_info['name']}</b>\n"
-    msg += f"🕐 {msk_time.strftime('%H:%M:%S')} МСК\n\n🤖 Наш бот: @growagardenstock235_bot"
+    msg += f"🕐 {msk_time.strftime('%H:%M:%S')} МСК\n\n🤖 @growagardenstock235_bot"
     return msg
 
 def format_full_stock_message(data):
     msk_time = get_msk_time()
-    msg = f"📦 <b>ТЕКУЩИЙ СТОК Grow a Garden 2</b>\n🕐 {msk_time.strftime('%H:%M:%S')} МСК\n\n"
-    for shop_type, shop_name in [("SeedShop_Normal", "🌾 Семена"), ("CrateShop", "📦 Ящики"), ("GearShop", "⚙️ Снаряжение")]:
-        msg += f"{shop_name}:\n"
+    msg = f"📦 <b>ТЕКУЩИЙ СТОК</b>\n"
+    msg += "━" * 30 + "\n"
+    msg += f"🕐 {msk_time.strftime('%H:%M:%S')} МСК\n"
+    msg += "━" * 30 + "\n\n"
+    
+    for shop_type, shop_name in [("SeedShop_Normal", "🌾 СЕМЕНА"), ("CrateShop", "📦 ЯЩИКИ"), ("GearShop", "⚙️ СНАРЯЖЕНИЕ")]:
+        msg += f"{shop_name}\n"
+        msg += "━" * 30 + "\n"
         has = False
         items_sorted = data.get("shops", {}).get(shop_type, [])
         for item in items_sorted:
             if item.get("stock", 0) > 0:
-                msg += f"• {item['name']} — {item['stock']} шт.\n"
+                msg += f"  • {item['name']} — <b>{item['stock']}</b> шт.\n"
                 has = True
         if not has:
-            msg += "Нет в наличии\n"
+            msg += "  Нет в наличии\n"
         msg += "\n"
+    
+    msg += "━" * 30 + "\n"
+    msg += "[🔙 Назад]"
     return msg
 
 def get_weather_type(data):
@@ -413,7 +516,6 @@ def get_weather_type(data):
     weathers = weather.get('weathers', {})
     phase = weather.get('phase', '')
     
-    # Проверяем активные эффекты в weathers
     for key in weathers.keys():
         val = weathers.get(key)
         if key == "night" or key == "day" or key == "sunset" or key == "moon":
@@ -423,7 +525,6 @@ def get_weather_type(data):
         if isinstance(val, dict) and val.get("playing") is True:
             return key
     
-    # Проверяем фазу
     if phase:
         for key in WEATHER_TYPES:
             if key == "Clear":
@@ -500,16 +601,21 @@ def format_stock_update_message(added, changed, removed):
                 msg += f"  • {name} ({rarity})\n"
         msg += "\n"
 
-    msg += "🤖 Наш бот: @growagardenstock235_bot"
+    msg += "🤖 @growagardenstock235_bot"
     return msg
 
-# ================= КЛАВИАТУРЫ =================
+# ================= УЛУЧШЕННЫЕ КЛАВИАТУРЫ =================
+
 def get_main_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🌾 Семена", callback_data="cat_Семена"), InlineKeyboardButton("📦 Ящики", callback_data="cat_Ящики")],
-        [InlineKeyboardButton("⚙️ Снаряжение", callback_data="cat_Снаряжение")],
-        [InlineKeyboardButton("📋 Мои подписки", callback_data="my_subs")],
-        [InlineKeyboardButton("📦 Весь сток", callback_data="full_stock"), InlineKeyboardButton("📊 Множители", callback_data="show_mults")]
+        [InlineKeyboardButton("🌾 СЕМЕНА", callback_data="cat_Семена"), 
+         InlineKeyboardButton("📦 ЯЩИКИ", callback_data="cat_Ящики"), 
+         InlineKeyboardButton("⚙️ СНАРЯЖЕНИЕ", callback_data="cat_Снаряжение")],
+        [InlineKeyboardButton("💎 Мои подписки", callback_data="my_subs")],
+        [InlineKeyboardButton("🔮 Предсказания", callback_data="show_predict"), 
+         InlineKeyboardButton("🌤️ Погода", callback_data="show_weather"),
+         InlineKeyboardButton("📊 Множители", callback_data="show_mults")],
+        [InlineKeyboardButton("🏪 Аукцион", callback_data="show_auction")],
     ])
 
 def get_admin_menu(chat_id):
@@ -519,7 +625,7 @@ def get_admin_menu(chat_id):
         [InlineKeyboardButton("🌾 Семена", callback_data="acat_Семена")],
         [InlineKeyboardButton("📦 Ящики", callback_data="acat_Ящики")],
         [InlineKeyboardButton("⚙️ Снаряжение", callback_data="acat_Снаряжение")],
-        [InlineKeyboardButton("🌤️ Погода", callback_data="acat_Погода")],
+        [InlineKeyboardButton(f"{weather_status} Погода", callback_data="acat_Погода")],
         [InlineKeyboardButton("🗑️ Очистить всё", callback_data="adm_clear")],
         [InlineKeyboardButton("🔙 Закрыть", callback_data="adm_close")]
     ])
@@ -573,8 +679,8 @@ def get_items_menu(user_id, category, page=0, is_admin=False, chat_id=None):
         subs = user_settings.get(str(user_id), {}).get("subscriptions", [])
 
     filtered = sorted([name for name, info in items.items() if info.get('category') == category])
-    per_page = 10
-    total_pages = max(1, (len(filtered) - 1) // per_page + 1) if filtered else 1
+    per_page = 8
+    total_pages = max(1, (len(filtered) + per_page - 1) // per_page)
     page = max(0, min(page, total_pages - 1))
 
     start = page * per_page
@@ -583,12 +689,18 @@ def get_items_menu(user_id, category, page=0, is_admin=False, chat_id=None):
     keyboard = []
     prefix = "aitm" if is_admin else "itm"
     for name in current_items:
+        info = items.get(name, {})
+        rarity = info.get('rarity', 'Common')
         status = "✅" if name in subs else "❌"
-        keyboard.append([InlineKeyboardButton(f"{status} {name}", callback_data=f"{prefix}_{category}_{page}_{name}")])
+        short_name = name[:20] + "..." if len(name) > 20 else name
+        keyboard.append([
+            InlineKeyboardButton(f"{status} {short_name}", callback_data=f"{prefix}_{category}_{page}_{name}")
+        ])
 
     nav = []
     if page > 0:
         nav.append(InlineKeyboardButton("◀️", callback_data=f"pg_{prefix}_{category}_{page-1}"))
+    nav.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="ignore"))
     if page < total_pages - 1:
         nav.append(InlineKeyboardButton("▶️", callback_data=f"pg_{prefix}_{category}_{page+1}"))
     if nav:
@@ -600,19 +712,23 @@ def get_items_menu(user_id, category, page=0, is_admin=False, chat_id=None):
 
 def get_subscriptions_menu(user_id, page=0):
     subscriptions = user_settings.get(str(user_id), {}).get("subscriptions", [])
-    items_per_page = 10
-    total_pages = max(1, (len(subscriptions) + items_per_page - 1) // items_per_page) if subscriptions else 1
+    per_page = 8
+    total_pages = max(1, (len(subscriptions) + per_page - 1) // per_page)
     page = max(0, min(page, total_pages - 1))
-    start = page * items_per_page
-    current_subs = subscriptions[start:start + items_per_page]
+    start = page * per_page
+    current_subs = subscriptions[start:start + per_page]
 
     keyboard = []
     for sub in current_subs:
-        keyboard.append([InlineKeyboardButton(f"❌ {sub}", callback_data=f"unsub_{sub}")])
+        short_name = sub[:20] + "..." if len(sub) > 20 else sub
+        keyboard.append([
+            InlineKeyboardButton(f"❌ {short_name}", callback_data=f"unsub_{sub}")
+        ])
 
     nav = []
     if page > 0:
         nav.append(InlineKeyboardButton("◀️", callback_data=f"sub_page_{page-1}"))
+    nav.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="ignore"))
     if page < total_pages - 1:
         nav.append(InlineKeyboardButton("▶️", callback_data=f"sub_page_{page+1}"))
     if nav:
@@ -676,13 +792,28 @@ async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 end_time = weathers[weather_type].get('endTime')
                 if end_time:
                     msg += f"⏱️ Длится до: {datetime.fromtimestamp(end_time).strftime('%H:%M:%S')} МСК\n"
-            msg += f"\n🕐 {get_msk_time().strftime('%H:%M:%S')} МСК\n\n🤖 Наш бот: @growagardenstock235_bot"
+            msg += f"\n🕐 {get_msk_time().strftime('%H:%M:%S')} МСК\n\n🤖 @growagardenstock235_bot"
             await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
         else:
             await update.message.reply_text("❌ Не удалось получить данные о погоде")
     except Exception as e:
         logger.error(f"Ошибка /weather: {e}")
         await update.message.reply_text(f"❌ Ошибка: {e}")
+
+async def auction_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /auction — показывает текущий аукцион"""
+    chat_id = str(update.effective_chat.id)
+    if is_group_blocked(chat_id):
+        return
+    logger.info(f"🏪 /auction от {chat_id}")
+    
+    data = get_auction_data()
+    if not data:
+        await update.message.reply_text("❌ Не удалось получить данные аукциона")
+        return
+    
+    msg = format_auction_message(data)
+    await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
@@ -698,16 +829,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_settings[uid]['last_active'] = time.time()
     save_json(DATA_FILE, user_settings)
     load_items()
+    
+    items_count = len(all_items)
+    subs_count = len(user_settings[uid].get("subscriptions", []))
+    
     await update.message.reply_text(
-        "🌱 <b>Grow a Garden 2 Tracker</b>\n\n"
-        "Выбери категорию, затем нажми на предмет.\n"
-        "✅ — получать уведомления\n"
-        "❌ — не получать\n\n"
-        f"📦 <b>Всего предметов:</b> {len(all_items)}\n\n"
-        "🔮 /predict — предсказания лун и стока\n"
-        "🌤️ /weather — текущая погода\n"
-        "📊 /multipliers — мультипликаторы предметов\n"
-        "🆔 /getid — узнать ID этого чата",
+        f"🌱 <b>Grow a Garden 2 Tracker</b>\n"
+        f"━" * 30 + "\n\n"
+        f"📊 <b>{items_count}</b> предметов в базе\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📌 Настрой уведомления в один клик:\n\n"
+        f"[🌾 СЕМЕНА] [📦 ЯЩИКИ] [⚙️ СНАРЯЖЕНИЕ]\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📋 [Мои подписки] — <b>{subs_count}</b> предметов\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🔮 Предсказания | 🌤️ Погода | 📊 Множители\n"
+        f"🏪 Аукцион\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🤖 @growagardenstock235_bot",
         parse_mode=ParseMode.HTML,
         reply_markup=get_main_menu()
     )
@@ -739,7 +878,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     cid_s = str(chat_id)
     if cid_s not in group_settings:
-        group_settings[cid_s] = {"subscriptions": [], "weather": False, "selected_weather": []}
+        group_settings[cid_s] = {"subscriptions": [], "weather": False, "selected_weather": [], "auction_topics": []}
         save_json(GROUP_SETTINGS_FILE, group_settings)
 
     await update.message.reply_text(
@@ -779,7 +918,7 @@ async def start_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     cid_s = str(chat_id)
     if cid_s not in group_settings:
-        group_settings[cid_s] = {"subscriptions": [], "weather": False, "selected_weather": []}
+        group_settings[cid_s] = {"subscriptions": [], "weather": False, "selected_weather": [], "auction_topics": []}
     
     if "stock_topics" not in group_settings[cid_s]:
         group_settings[cid_s]["stock_topics"] = []
@@ -853,7 +992,7 @@ async def start_weather_topic(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     cid_s = str(chat_id)
     if cid_s not in group_settings:
-        group_settings[cid_s] = {"subscriptions": [], "weather": False, "selected_weather": []}
+        group_settings[cid_s] = {"subscriptions": [], "weather": False, "selected_weather": [], "auction_topics": []}
     
     if "weather_topics" not in group_settings[cid_s]:
         group_settings[cid_s]["weather_topics"] = []
@@ -897,6 +1036,93 @@ async def stop_weather_topic(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await update.message.reply_text("✅ Этот топик удалён из уведомлений о погоде!")
         else:
             await update.message.reply_text("ℹ️ Этот топик не был добавлен для уведомлений о погоде")
+    else:
+        await update.message.reply_text("ℹ️ Нет настроек для этого топика")
+
+# ================= КОМАНДЫ ДЛЯ ТОПИКА АУКЦИОНА =================
+async def start_auction_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Включить уведомления об аукционе в топик"""
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    thread_id = update.effective_message.message_thread_id
+    
+    if chat_id > 0:
+        await update.message.reply_text("❌ Эта команда работает только в группах с топиками!")
+        return
+    
+    if not thread_id:
+        await update.message.reply_text("❌ Эта команда должна быть вызвана в топике!")
+        return
+    
+    try:
+        member = await context.bot.get_chat_member(chat_id, user_id)
+        if member.status not in ['creator', 'administrator']:
+            await update.message.reply_text("❌ Только администраторы группы могут настраивать уведомления в топиках!")
+            return
+    except Exception as e:
+        logger.error(f"Ошибка проверки прав: {e}")
+        await update.message.reply_text("❌ Не удалось проверить ваши права!")
+        return
+    
+    cid_s = str(chat_id)
+    if cid_s not in group_settings:
+        group_settings[cid_s] = {"subscriptions": [], "weather": False, "selected_weather": [], "auction_topics": []}
+    
+    if "auction_topics" not in group_settings[cid_s]:
+        group_settings[cid_s]["auction_topics"] = []
+    
+    if thread_id not in group_settings[cid_s]["auction_topics"]:
+        group_settings[cid_s]["auction_topics"].append(thread_id)
+        save_json(GROUP_SETTINGS_FILE, group_settings)
+        
+        # Сразу отправляем первое сообщение
+        data = get_auction_data()
+        if data:
+            msg = format_auction_message(data)
+            sent = await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+            auction_messages[f"{chat_id}_{thread_id}"] = sent.message_id
+            save_json(AUCTION_MESSAGES_FILE, auction_messages)
+        
+        await update.message.reply_text(
+            f"✅ Этот топик добавлен для уведомлений об АУКЦИОНЕ!\n\n"
+            f"🏪 Теперь все обновления аукциона будут приходить сюда.\n"
+            f"🆔 ID топика: `{thread_id}`\n\n"
+            f"🔄 Обновление каждые 30 секунд",
+            parse_mode=ParseMode.HTML
+        )
+    else:
+        await update.message.reply_text("ℹ️ Этот топик уже добавлен для уведомлений об аукционе!")
+
+async def stop_auction_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отключить уведомления об аукционе в топике"""
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    thread_id = update.effective_message.message_thread_id
+    
+    if chat_id > 0 or not thread_id:
+        await update.message.reply_text("❌ Эта команда работает только в топиках групп!")
+        return
+    
+    try:
+        member = await context.bot.get_chat_member(chat_id, user_id)
+        if member.status not in ['creator', 'administrator']:
+            await update.message.reply_text("❌ Только администраторы могут управлять этим!")
+            return
+    except:
+        pass
+    
+    cid_s = str(chat_id)
+    if cid_s in group_settings and "auction_topics" in group_settings[cid_s]:
+        if thread_id in group_settings[cid_s]["auction_topics"]:
+            group_settings[cid_s]["auction_topics"].remove(thread_id)
+            save_json(GROUP_SETTINGS_FILE, group_settings)
+            # Удаляем сообщение из кеша
+            key = f"{chat_id}_{thread_id}"
+            auction_messages.pop(key, None)
+            save_json(AUCTION_MESSAGES_FILE, auction_messages)
+            await update.message.reply_text("✅ Этот топик удалён из уведомлений об аукционе!")
+        else:
+            await update.message.reply_text("ℹ️ Этот топик не был добавлен для уведомлений об аукционе")
     else:
         await update.message.reply_text("ℹ️ Нет настроек для этого топика")
 
@@ -1031,6 +1257,48 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 save_json(MULTIPLIER_MESSAGES_FILE, multiplier_messages)
             return
 
+        elif data == "show_predict":
+            data_predict = get_predictions_data()
+            if data_predict:
+                msg = format_predict_msg(data_predict)
+                await safe_edit(query, msg, reply_markup=get_main_menu())
+                if query.message:
+                    predict_messages[cid] = query.message.message_id
+                    save_json(PREDICT_MESSAGES_FILE, predict_messages)
+            else:
+                await safe_edit(query, "❌ Не удалось получить данные предсказаний", reply_markup=get_main_menu())
+            return
+
+        elif data == "show_weather":
+            try:
+                data_api = fetch_with_retry(API_URL)
+                if data_api:
+                    weather_type = get_weather_type(data_api)
+                    weather = data_api.get('weather', {})
+                    weathers = weather.get('weathers', {})
+                    weather_info = WEATHER_TYPES.get(weather_type, {"emoji": "☀️", "name": "Обычная"})
+                    msg = f"🌤️ <b>ТЕКУЩАЯ ПОГОДА</b>\n\n{weather_info['emoji']} <b>{weather_info['name']}</b>\n"
+                    if weather_type != "Clear" and isinstance(weathers.get(weather_type), dict):
+                        end_time = weathers[weather_type].get('endTime')
+                        if end_time:
+                            msg += f"⏱️ Длится до: {datetime.fromtimestamp(end_time).strftime('%H:%M:%S')} МСК\n"
+                    msg += f"\n🕐 {get_msk_time().strftime('%H:%M:%S')} МСК\n\n🤖 @growagardenstock235_bot"
+                    await safe_edit(query, msg, reply_markup=get_main_menu())
+                else:
+                    await safe_edit(query, "❌ Не удалось получить данные о погоде", reply_markup=get_main_menu())
+            except Exception as e:
+                await safe_edit(query, f"❌ Ошибка: {e}", reply_markup=get_main_menu())
+            return
+
+        elif data == "show_auction":
+            data_auction = get_auction_data()
+            if data_auction:
+                msg = format_auction_message(data_auction)
+                await safe_edit(query, msg, reply_markup=get_main_menu())
+            else:
+                await safe_edit(query, "❌ Не удалось получить данные аукциона", reply_markup=get_main_menu())
+            return
+
         elif data == "full_stock":
             try:
                 data_api = fetch_with_retry(API_URL)
@@ -1048,7 +1316,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not subscriptions:
                 await safe_edit(query, "📋 <b>Нет подписок</b>", reply_markup=get_main_menu())
             else:
-                await safe_edit(query, "📋 <b>Твои подписки</b>", reply_markup=get_subscriptions_menu(uid))
+                await safe_edit(query, "📋 <b>Мои подписки</b>", reply_markup=get_subscriptions_menu(uid))
             return
 
         elif data.startswith("sub_page_"):
@@ -1063,14 +1331,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_settings[uid]["subscriptions"] = subscriptions
             save_json(DATA_FILE, user_settings)
             if subscriptions:
-                await safe_edit(query, "📋 <b>Твои подписки</b>", reply_markup=get_subscriptions_menu(uid))
+                await safe_edit(query, "📋 <b>Мои подписки</b>", reply_markup=get_subscriptions_menu(uid))
             else:
                 await safe_edit(query, "📋 <b>Нет подписок</b>", reply_markup=get_main_menu())
             return
 
         elif data.startswith("cat_"):
             cat = data.split("_")[1]
-            await safe_edit(query, f"📂 Категория: <b>{cat}</b>", reply_markup=get_items_menu(uid, cat))
+            await safe_edit(query, f"🌾 <b>{cat}</b>", reply_markup=get_items_menu(uid, cat))
 
         elif data.startswith("pg_itm_"):
             _, _, cat, pg = data.split("_")
@@ -1358,6 +1626,54 @@ async def update_multipliers_job(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Ошибка update_multipliers: {e}")
 
+async def update_auction_job(context: ContextTypes.DEFAULT_TYPE):
+    """Автообновление аукциона каждые 30 секунд"""
+    try:
+        data = get_auction_data()
+        if not data:
+            return
+        
+        msg = format_auction_message(data)
+        
+        # Обновляем сообщения в топиках
+        for key, msg_id in list(auction_messages.items()):
+            try:
+                chat_id, thread_id = key.split('_')
+                await context.bot.edit_message_text(
+                    chat_id=int(chat_id),
+                    message_id=msg_id,
+                    text=msg,
+                    parse_mode=ParseMode.HTML
+                )
+                logger.info(f"🏪 Аукцион обновлён для топика {thread_id} в чате {chat_id}")
+            except Exception as e:
+                logger.warning(f"⚠️ Не удалось обновить аукцион для {key}: {e}")
+                auction_messages.pop(key, None)
+                save_json(AUCTION_MESSAGES_FILE, auction_messages)
+        
+        # Проверяем, нужно ли создать новые сообщения в топиках
+        for cid_s, settings in group_settings.items():
+            auction_topics = settings.get("auction_topics", [])
+            for thread_id in auction_topics:
+                key = f"{cid_s}_{thread_id}"
+                if key not in auction_messages:
+                    try:
+                        sent = await context.bot.send_message(
+                            chat_id=int(cid_s),
+                            message_thread_id=thread_id,
+                            text=msg,
+                            parse_mode=ParseMode.HTML
+                        )
+                        auction_messages[key] = sent.message_id
+                        logger.info(f"🏪 Создано новое сообщение аукциона в топике {thread_id}")
+                    except Exception as e:
+                        logger.error(f"❌ Ошибка создания сообщения аукциона: {e}")
+        
+        save_json(AUCTION_MESSAGES_FILE, auction_messages)
+        
+    except Exception as e:
+        logger.error(f"Ошибка обновления аукциона: {e}")
+
 # ================= ЗАПУСК =================
 def main():
     logger.info("🚀 Запуск бота...")
@@ -1385,11 +1701,12 @@ def main():
     except Exception as e:
         logger.warning(f"⚠️ Не удалось очистить вебхук: {e}")
 
-    global user_settings, group_settings, predict_messages, multiplier_messages, blacklist
+    global user_settings, group_settings, predict_messages, multiplier_messages, auction_messages, blacklist
     user_settings = load_json(DATA_FILE, {})
     group_settings = load_json(GROUP_SETTINGS_FILE, {})
     predict_messages = load_json(PREDICT_MESSAGES_FILE, {})
     multiplier_messages = load_json(MULTIPLIER_MESSAGES_FILE, {})
+    auction_messages = load_json(AUCTION_MESSAGES_FILE, {})
     blacklist = load_json(BLACKLIST_FILE, [])
 
     import telegram
@@ -1418,25 +1735,35 @@ def main():
     app.add_handler(CommandHandler("weather", weather_command))
     app.add_handler(CommandHandler("predict", predict_command))
     app.add_handler(CommandHandler("multipliers", multipliers_command))
+    app.add_handler(CommandHandler("auction", auction_command))
     app.add_handler(CommandHandler("getid", getid_command))
     app.add_handler(CommandHandler("start_topic", start_topic))
     app.add_handler(CommandHandler("stop_topic", stop_topic))
     app.add_handler(CommandHandler("start_weather_topic", start_weather_topic))
     app.add_handler(CommandHandler("stop_weather_topic", stop_weather_topic))
+    app.add_handler(CommandHandler("start_auction_topic", start_auction_topic))
+    app.add_handler(CommandHandler("stop_auction_topic", stop_auction_topic))
     app.add_handler(CommandHandler("blacklist", blacklist_command))
     app.add_handler(CommandHandler("blacklist_add", blacklist_add))
     app.add_handler(CommandHandler("blacklist_remove", blacklist_remove))
     app.add_handler(CallbackQueryHandler(button_handler))
 
+    # ===== ФОНОВЫЕ ЗАДАЧИ =====
     try:
         app.job_queue.run_repeating(check_and_notify, interval=10, first=5)
         app.job_queue.run_repeating(update_predictions_job, interval=30, first=10)
         app.job_queue.run_repeating(update_multipliers_job, interval=60, first=15)
+        
+        # ===== АУКЦИОН (ОБНОВЛЕНИЕ КАЖДЫЕ 30 СЕКУНД) =====
+        # Чтобы изменить интервал — замени число 30 на нужное количество секунд
+        # 30 = 30 секунд, 60 = 1 минута, 120 = 2 минуты, 300 = 5 минут
+        app.job_queue.run_repeating(update_auction_job, interval=30, first=10)
+        
         logger.info("✅ Фоновые задачи запущены")
     except Exception as e:
         logger.error(f"❌ Ошибка запуска фоновых задач: {e}")
 
-    logger.info("✅ Бот запущен! Доступны команды: /start, /admin, /weather, /predict, /multipliers, /getid, /start_topic, /stop_topic, /start_weather_topic, /stop_weather_topic, /blacklist, /blacklist_add, /blacklist_remove")
+    logger.info("✅ Бот запущен! Доступны команды: /start, /admin, /weather, /predict, /multipliers, /auction, /getid, /start_topic, /stop_topic, /start_weather_topic, /stop_weather_topic, /start_auction_topic, /stop_auction_topic, /blacklist, /blacklist_add, /blacklist_remove")
 
     try:
         app.run_polling(
